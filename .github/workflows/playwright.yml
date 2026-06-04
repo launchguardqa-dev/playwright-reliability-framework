@@ -1,0 +1,101 @@
+name: Playwright Tests
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+  # Allow manual runs from the Actions tab
+  workflow_dispatch:
+    inputs:
+      test_suite:
+        description: 'Which suite to run'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - smoke
+          - auth
+          - cart
+
+jobs:
+  test:
+    name: Playwright (${{ matrix.project }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    strategy:
+      fail-fast: false
+      matrix:
+        project: [chromium, firefox]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps ${{ matrix.project }}
+
+      - name: Run Playwright tests
+        run: |
+          if [ "${{ github.event.inputs.test_suite }}" = "smoke" ]; then
+            npx playwright test --grep @smoke --project=${{ matrix.project }}
+          elif [ "${{ github.event.inputs.test_suite }}" = "auth" ]; then
+            npx playwright test tests/auth/ --project=${{ matrix.project }}
+          elif [ "${{ github.event.inputs.test_suite }}" = "cart" ]; then
+            npx playwright test tests/cart/ --project=${{ matrix.project }}
+          else
+            npx playwright test --project=${{ matrix.project }}
+          fi
+        env:
+          CI: true
+          BASE_URL: ${{ secrets.BASE_URL || 'https://www.saucedemo.com' }}
+          STANDARD_USER: ${{ secrets.STANDARD_USER || 'standard_user' }}
+          TEST_PASSWORD: ${{ secrets.TEST_PASSWORD || 'secret_sauce' }}
+
+      - name: Upload HTML report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playwright-report-${{ matrix.project }}
+          path: reports/html/
+          retention-days: 14
+
+      - name: Upload test results (on failure)
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: test-results-${{ matrix.project }}
+          path: reports/test-results/
+          retention-days: 7
+
+  smoke-gate:
+    name: Smoke Gate (pre-merge check)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: github.event_name == 'pull_request'
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+
+      - name: Run smoke tests only
+        run: npx playwright test --grep @smoke --project=chromium
+        env:
+          CI: true
