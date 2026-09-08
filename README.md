@@ -22,6 +22,57 @@ This framework is built around the opposite philosophy:
 
 ---
 
+## Problems This Framework Solves
+
+Most Playwright suites start clean and become unreliable within a few months. Here's what typically goes wrong — and how this framework avoids it.
+
+### ❌ Before: Flaky, hard-to-debug automation
+
+```typescript
+// Arbitrary waits mask real timing issues instead of fixing them
+await page.waitForTimeout(5000);
+
+// Brittle locator breaks the moment the DOM structure shifts
+await page.locator('div:nth-child(4) > button').click();
+
+// No retry strategy — one network blip fails the whole CI run
+await page.click('#submit');
+```
+
+**What goes wrong in production:**
+- `waitForTimeout` guesses at timing instead of waiting for the actual condition — tests pass locally on a fast machine and fail in CI on a slower runner
+- `nth-child` selectors break the moment someone reorders elements or a designer tweaks the layout
+- No retry strategy means a single transient network hiccup fails the entire pipeline, and nobody trusts the "red" build enough to investigate
+
+### ✅ After: The LaunchGuard approach
+
+```typescript
+// Wait for the actual condition, not a guess at timing
+await expect(page.locator('[data-test="submit"]')).toBeEnabled();
+
+// Stable, semantic locator — survives layout and DOM changes
+await page.getByRole('button', { name: 'Submit Order' }).click();
+
+// Retries on CI absorb genuine transient flakiness (playwright.config.ts)
+retries: process.env.CI ? 2 : 0,
+```
+
+**Why this holds up:**
+- Explicit waits target the actual state you care about, so tests are exactly as fast as the app allows — no more, no less
+- Locators based on role and accessible name survive redesigns because they describe *intent*, not DOM position
+- CI-only retries catch real transient issues without hiding systematic bugs — if a test needs 3 attempts, that's a signal, not a fluke to ignore
+
+### The result
+
+| | Before | After |
+|---|---|---|
+| Flaky failure rate | High, inconsistent | Near-zero, predictable |
+| Debugging a failure | Guesswork | Trace + screenshot + video attached automatically |
+| Trust in CI | "Just re-run it" | Red means broken |
+| Onboarding a new engineer | Tribal knowledge | Page Object Model — self-documenting |
+
+---
+
 ## Tech Stack
 
 | Tool | Version | Purpose |
