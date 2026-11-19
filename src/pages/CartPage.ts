@@ -1,4 +1,4 @@
-import { Page, Locator } from '@playwright/test';
+import { Page, Locator, expect } from '@playwright/test';
 import { BasePage } from './BasePage';
 
 /**
@@ -54,18 +54,13 @@ export class CartPage extends BasePage {
     );
   }
 
+  /** Auto-retrying count check: waits for the cart to settle instead of reading once. */
   async assertItemCount(expectedCount: number): Promise<void> {
-    await this.cartItems.nth(expectedCount - 1).waitFor({ state: 'visible' });
-    const count = await this.cartItems.count();
-    if (count !== expectedCount) {
-      throw new Error(`Expected ${expectedCount} cart items but found ${count}`);
-    }
+    await expect(this.cartItems, `Cart should contain ${expectedCount} item(s)`).toHaveCount(expectedCount);
   }
 
   async assertCartEmpty(): Promise<void> {
-    const count = await this.cartItems.count();
-    if (count !== 0) {
-      throw new Error(`Expected empty cart but found ${count} items`);
-    }
+    await this.assertOnCartPage();
+    await this.assertItemCount(0);
   }
 }

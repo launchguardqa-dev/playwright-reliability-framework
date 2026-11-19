@@ -1,5 +1,4 @@
 import { test } from '../../src/fixtures';
-import { CartPage } from '../../src/pages/CartPage';
 
 /**
  * Cart Tests
@@ -33,30 +32,27 @@ test.describe('Shopping Cart', () => {
     await authenticatedInventoryPage.assertCartCount(0);
   });
 
-  test('should display added item in cart view @smoke', async ({ page, authenticatedInventoryPage }) => {
+  test('should display added item in cart view @smoke', async ({ authenticatedInventoryPage, cartPage }) => {
     await authenticatedInventoryPage.addItemToCart('sauce-labs-backpack');
     await authenticatedInventoryPage.goToCart();
 
-    const cartPage = new CartPage(page);
     await cartPage.assertOnCartPage();
     await cartPage.assertItemInCart('Sauce Labs Backpack');
     await cartPage.assertItemCount(1);
   });
 
-  test('should reflect empty cart after removing all items', async ({ page, authenticatedInventoryPage }) => {
+  test('should reflect empty cart after removing all items', async ({ authenticatedInventoryPage, cartPage }) => {
     await authenticatedInventoryPage.addItemToCart('sauce-labs-backpack');
     await authenticatedInventoryPage.removeItemFromCart('sauce-labs-backpack');
     await authenticatedInventoryPage.goToCart();
 
-    const cartPage = new CartPage(page);
     await cartPage.assertCartEmpty();
   });
 
-  test('should continue shopping from cart', async ({ page, authenticatedInventoryPage }) => {
+  test('should continue shopping from cart', async ({ authenticatedInventoryPage, cartPage }) => {
     await authenticatedInventoryPage.addItemToCart('sauce-labs-backpack');
     await authenticatedInventoryPage.goToCart();
 
-    const cartPage = new CartPage(page);
     await cartPage.continueShopping();
     await authenticatedInventoryPage.assertOnInventoryPage();
   });

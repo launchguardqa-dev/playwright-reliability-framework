@@ -1,12 +1,17 @@
 {
   "name": "playwright-reliability-framework",
   "version": "1.0.0",
-  "description": "Enterprise-grade Playwright + TypeScript automation framework focused on reliability, scalability, and CI stability.",
+  "description": "Playwright + TypeScript automation framework focused on reliability, maintainability, and CI stability.",
   "scripts": {
     "test": "playwright test",
     "test:smoke": "playwright test --grep @smoke",
     "test:auth": "playwright test tests/auth/",
     "test:cart": "playwright test tests/cart/",
+    "test:checkout": "playwright test tests/checkout/",
+    "test:navigation": "playwright test tests/navigation/",
+    "test:product": "playwright test tests/product/",
+    "test:sorting": "playwright test tests/sorting/",
+    "test:flake-check": "playwright test --project=chromium --repeat-each=10 --retries=0",
     "test:headed": "playwright test --headed",
     "test:debug": "playwright test --debug",
     "test:report": "playwright show-report",
@@ -22,6 +27,7 @@
     "@typescript-eslint/parser": "^7.0.0",
     "dotenv": "^16.4.0",
     "eslint": "^8.57.0",
+    "eslint-plugin-playwright": "^1.8.3",
     "typescript": "^5.4.0"
   },
   "engines": {

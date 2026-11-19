@@ -1,5 +1,4 @@
 import { test } from '../../src/fixtures';
-import { ProductDetailPage } from '../../src/pages/ProductDetailPage';
 import { PRODUCTS } from '../../src/constants/checkout';
 
 /**
@@ -10,92 +9,60 @@ import { PRODUCTS } from '../../src/constants/checkout';
  */
 test.describe('Product Detail', () => {
 
-  test('should navigate to product detail page by clicking product name', async ({ page, authenticatedInventoryPage }) => {
-    const productDetail = new ProductDetailPage(page);
+  test('should navigate to product detail page by clicking product name', async ({ authenticatedInventoryPage, productDetailPage }) => {
+    await authenticatedInventoryPage.openProduct(PRODUCTS.BACKPACK.name);
 
-    await authenticatedInventoryPage.page
-      .locator('[data-test="inventory-item-name"]')
-      .filter({ hasText: PRODUCTS.BACKPACK.name })
-      .click();
-
-    await productDetail.assertOnDetailPage();
-    await productDetail.assertProductName(PRODUCTS.BACKPACK.name);
+    await productDetailPage.assertOnDetailPage();
+    await productDetailPage.assertProductName(PRODUCTS.BACKPACK.name);
   });
 
-  test('should display all product detail elements', async ({ page, authenticatedInventoryPage }) => {
-    const productDetail = new ProductDetailPage(page);
+  test('should display all product detail elements', async ({ authenticatedInventoryPage, productDetailPage }) => {
+    await authenticatedInventoryPage.openProduct(PRODUCTS.BACKPACK.name);
 
-    await authenticatedInventoryPage.page
-      .locator('[data-test="inventory-item-name"]')
-      .filter({ hasText: PRODUCTS.BACKPACK.name })
-      .click();
-
-    await productDetail.assertOnDetailPage();
-    await productDetail.assertPriceVisible();
-    await productDetail.assertDescriptionVisible();
-    await productDetail.assertImageVisible();
-    await productDetail.assertAddToCartVisible();
+    await productDetailPage.assertOnDetailPage();
+    await productDetailPage.assertPriceVisible();
+    await productDetailPage.assertDescriptionVisible();
+    await productDetailPage.assertImageVisible();
+    await productDetailPage.assertAddToCartVisible();
   });
 
-  test('should add item to cart from product detail page @smoke', async ({ page, authenticatedInventoryPage }) => {
-    const productDetail = new ProductDetailPage(page);
+  test('should add item to cart from product detail page @smoke', async ({ authenticatedInventoryPage, productDetailPage }) => {
+    await authenticatedInventoryPage.openProduct(PRODUCTS.BACKPACK.name);
 
-    await authenticatedInventoryPage.page
-      .locator('[data-test="inventory-item-name"]')
-      .filter({ hasText: PRODUCTS.BACKPACK.name })
-      .click();
-
-    await productDetail.addToCart();
-    await productDetail.assertCartCount(1);
-    await productDetail.assertRemoveVisible();
+    await productDetailPage.addToCart();
+    await productDetailPage.assertCartCount(1);
+    await productDetailPage.assertRemoveVisible();
   });
 
-  test('should remove item from cart on product detail page', async ({ page, authenticatedInventoryPage }) => {
-    const productDetail = new ProductDetailPage(page);
+  test('should remove item from cart on product detail page', async ({ authenticatedInventoryPage, productDetailPage }) => {
+    await authenticatedInventoryPage.openProduct(PRODUCTS.BACKPACK.name);
 
-    await authenticatedInventoryPage.page
-      .locator('[data-test="inventory-item-name"]')
-      .filter({ hasText: PRODUCTS.BACKPACK.name })
-      .click();
+    await productDetailPage.addToCart();
+    await productDetailPage.assertRemoveVisible();
 
-    await productDetail.addToCart();
-    await productDetail.assertRemoveVisible();
-
-    await productDetail.removeFromCart();
-    await productDetail.assertAddToCartVisible();
+    await productDetailPage.removeFromCart();
+    await productDetailPage.assertAddToCartVisible();
   });
 
-  test('should return to inventory when back button is clicked', async ({ page, authenticatedInventoryPage }) => {
-    const productDetail = new ProductDetailPage(page);
+  test('should return to inventory when back button is clicked', async ({ authenticatedInventoryPage, productDetailPage }) => {
+    await authenticatedInventoryPage.openProduct(PRODUCTS.BACKPACK.name);
 
-    await authenticatedInventoryPage.page
-      .locator('[data-test="inventory-item-name"]')
-      .filter({ hasText: PRODUCTS.BACKPACK.name })
-      .click();
-
-    await productDetail.assertOnDetailPage();
-    await productDetail.goBack();
+    await productDetailPage.assertOnDetailPage();
+    await productDetailPage.goBack();
 
     await authenticatedInventoryPage.assertOnInventoryPage();
   });
 
-  test('should preserve cart state when navigating back from detail page', async ({ page, authenticatedInventoryPage }) => {
-    const productDetail = new ProductDetailPage(page);
-
+  test('should preserve cart state when navigating back from detail page', async ({ authenticatedInventoryPage, productDetailPage }) => {
     // Add one item from inventory
-    await authenticatedInventoryPage.addItemToCart('sauce-labs-bike-light');
+    await authenticatedInventoryPage.addItemToCart(PRODUCTS.BIKE_LIGHT.dataTestId);
 
-    // Go to detail page of a different item
-    await authenticatedInventoryPage.page
-      .locator('[data-test="inventory-item-name"]')
-      .filter({ hasText: PRODUCTS.BACKPACK.name })
-      .click();
+    // Add a different item from its detail page
+    await authenticatedInventoryPage.openProduct(PRODUCTS.BACKPACK.name);
+    await productDetailPage.addToCart();
 
-    // Add from detail page
-    await productDetail.addToCart();
-
-    // Go back — cart should have 2 items
-    await productDetail.goBack();
+    // Go back: cart should have 2 items
+    await productDetailPage.goBack();
     await authenticatedInventoryPage.assertCartCount(2);
   });
 });

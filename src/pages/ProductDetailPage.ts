@@ -1,9 +1,16 @@
-import { Page, Locator } from '@playwright/test';
+import { Page, Locator, expect } from '@playwright/test';
 import { BasePage } from './BasePage';
+import { ROUTES } from '../constants/routes';
 
 /**
  * ProductDetailPage
  * Represents the individual product detail screen (/inventory-item.html)
+ *
+ * Reliability note: the detail page reuses several data-test ids from the
+ * inventory list (e.g. "inventory-item-name"). Locators here use the exact
+ * detail-page ids ("add-to-cart", "remove") and every entry point waits for
+ * the detail URL first, so a locator can never resolve against the list page
+ * while navigation is still in flight.
  */
 export class ProductDetailPage extends BasePage {
   // ── Locators ─────────────────────────────────────────────
@@ -21,8 +28,8 @@ export class ProductDetailPage extends BasePage {
     this.productName = page.locator('[data-test="inventory-item-name"]');
     this.productDescription = page.locator('[data-test="inventory-item-desc"]');
     this.productPrice = page.locator('[data-test="inventory-item-price"]');
-    this.addToCartButton = page.locator('[data-test^="add-to-cart"]');
-    this.removeButton = page.locator('[data-test^="remove"]');
+    this.addToCartButton = page.locator('[data-test="add-to-cart"]');
+    this.removeButton = page.locator('[data-test="remove"]');
     this.backButton = page.locator('[data-test="back-to-products"]');
     this.productImage = page.locator('.inventory_details_img');
     this.cartBadge = page.locator('[data-test="shopping-cart-badge"]');
@@ -44,9 +51,11 @@ export class ProductDetailPage extends BasePage {
 
   // ── Assertions ───────────────────────────────────────────
 
+  /** Waits for the detail URL before checking content, never the other way round. */
   async assertOnDetailPage(): Promise<void> {
-    await this.assertVisible(this.productName, 'Product name should be visible on detail page');
-    await this.assertUrlContains('inventory-item.html');
+    await this.assertUrlContains(ROUTES.PRODUCT_DETAIL);
+    await expect(this.productName, 'Exactly one product name should show on the detail page').toHaveCount(1);
+    await this.assertVisible(this.backButton, 'Back to products button should be visible on detail page');
   }
 
   async assertProductName(name: string): Promise<void> {

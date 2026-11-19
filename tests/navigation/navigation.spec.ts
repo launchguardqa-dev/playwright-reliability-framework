@@ -1,5 +1,6 @@
-import { test, expect } from '../../src/fixtures';
-import { LoginPage } from '../../src/pages/LoginPage';
+import { test } from '../../src/fixtures';
+import { ROUTES } from '../../src/constants/routes';
+import { PRODUCTS } from '../../src/constants/checkout';
 
 /**
  * Navigation Tests
@@ -21,68 +22,49 @@ test.describe('Navigation & Menu', () => {
     await authenticatedNavigationPage.assertMenuClosed();
   });
 
-  test('should log out successfully @smoke', async ({ page, authenticatedNavigationPage }) => {
-    const loginPage = new LoginPage(page);
-
+  test('should log out successfully @smoke', async ({ authenticatedNavigationPage, loginPage }) => {
     await authenticatedNavigationPage.logout();
 
     await loginPage.assertOnLoginPage();
-    await authenticatedNavigationPage.assertUrlContains('/');
+    await loginPage.assertPathIs(ROUTES.LOGIN);
   });
 
-  test('should redirect to login when accessing inventory without auth', async ({ page }) => {
-    const loginPage = new LoginPage(page);
+  const protectedRoutes = [
+    { name: 'inventory', path: ROUTES.INVENTORY },
+    { name: 'cart', path: ROUTES.CART },
+    { name: 'checkout', path: ROUTES.CHECKOUT_STEP_ONE },
+  ];
 
-    await page.goto('/inventory.html');
+  for (const route of protectedRoutes) {
+    test(`should redirect to login when accessing ${route.name} without auth`, async ({ page, loginPage }) => {
+      await page.goto(route.path);
 
-    await loginPage.assertOnLoginPage();
-  });
+      await loginPage.assertOnLoginPage();
+      await loginPage.assertPathIs(ROUTES.LOGIN);
+    });
+  }
 
-  test('should redirect to login when accessing cart without auth', async ({ page }) => {
-    const loginPage = new LoginPage(page);
-
-    await page.goto('/cart.html');
-
-    await loginPage.assertOnLoginPage();
-  });
-
-  test('should redirect to login when accessing checkout without auth', async ({ page }) => {
-    const loginPage = new LoginPage(page);
-
-    await page.goto('/checkout-step-one.html');
-
-    await loginPage.assertOnLoginPage();
-  });
-
-  test('should navigate to all items from menu', async ({ page, authenticatedNavigationPage }) => {
-    // First go to cart, then use menu to go back to inventory
+  test('should navigate to all items from menu', async ({ authenticatedNavigationPage }) => {
     await authenticatedNavigationPage.goToCart();
-    await authenticatedNavigationPage.assertUrlContains('/cart.html');
+    await authenticatedNavigationPage.assertPathIs(ROUTES.CART);
 
     await authenticatedNavigationPage.goToAllItems();
-    await authenticatedNavigationPage.assertUrlContains('/inventory.html');
+    await authenticatedNavigationPage.assertPathIs(ROUTES.INVENTORY);
   });
 
-  test('should not be able to go back to inventory after logout', async ({ page, authenticatedNavigationPage }) => {
-    const loginPage = new LoginPage(page);
-
+  test('should not be able to go back to inventory after logout', async ({ page, authenticatedNavigationPage, loginPage }) => {
     await authenticatedNavigationPage.logout();
     await page.goBack();
 
-    // Should still be on login page or redirected back
     await loginPage.assertOnLoginPage();
   });
 
-  test('should reset app state and clear cart', async ({ page, authenticatedNavigationPage }) => {
-    // Add items to cart first
-    await page.goto('/inventory.html');
-    await page.locator('[data-test="add-to-cart-sauce-labs-backpack"]').click();
-    await expect(page.locator('[data-test="shopping-cart-badge"]')).toHaveText('1');
+  test('should reset app state and clear cart', async ({ authenticatedInventoryPage, navigationPage }) => {
+    await authenticatedInventoryPage.addItemToCart(PRODUCTS.BACKPACK.dataTestId);
+    await authenticatedInventoryPage.assertCartCount(1);
 
-    // Reset via menu
-    await authenticatedNavigationPage.resetAppState();
+    await navigationPage.resetAppState();
 
-    // Cart badge should be gone
-    await expect(page.locator('[data-test="shopping-cart-badge"]')).toBeHidden();
+    await authenticatedInventoryPage.assertCartCount(0);
   });
 });

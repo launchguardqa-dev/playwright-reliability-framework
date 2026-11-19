@@ -18,11 +18,16 @@ type PageFixtures = {
   authenticatedNavigationPage: NavigationPage;
 };
 
+/**
+ * Page fixtures only construct page objects; they never navigate.
+ * A fixture that navigates during setup can silently satisfy a test's
+ * own assertions (e.g. a logout test "landing" on a login page the
+ * fixture already loaded). Navigation belongs in the test or in the
+ * explicit authenticated* fixtures below.
+ */
 export const test = base.extend<PageFixtures>({
   loginPage: async ({ page }, use) => {
-    const loginPage = new LoginPage(page);
-    await loginPage.goto();
-    await use(loginPage);
+    await use(new LoginPage(page));
   },
 
   inventoryPage: async ({ page }, use) => {
@@ -67,6 +72,7 @@ export const test = base.extend<PageFixtures>({
     const loginPage = new LoginPage(page);
     await loginPage.goto();
     await loginPage.login(USERS.STANDARD.username, USERS.STANDARD.password);
+    await new InventoryPage(page).assertOnInventoryPage();
 
     await use(new NavigationPage(page));
   },

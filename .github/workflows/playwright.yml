@@ -18,10 +18,33 @@ on:
           - smoke
           - auth
           - cart
+          - checkout
+          - navigation
+          - product
+          - sorting
 
 jobs:
+  quality:
+    name: Lint + Typecheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - run: npm ci
+      - name: Lint (includes missing-await and no-hard-sleep rules)
+        run: npm run lint
+      - name: Typecheck
+        run: npm run typecheck
+
   test:
     name: Playwright (${{ matrix.project }})
+    needs: quality
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -48,16 +71,13 @@ jobs:
 
       - name: Run Playwright tests
         run: |
-          if [ "${{ github.event.inputs.test_suite }}" = "smoke" ]; then
-            npx playwright test --grep @smoke --project=${{ matrix.project }}
-          elif [ "${{ github.event.inputs.test_suite }}" = "auth" ]; then
-            npx playwright test tests/auth/ --project=${{ matrix.project }}
-          elif [ "${{ github.event.inputs.test_suite }}" = "cart" ]; then
-            npx playwright test tests/cart/ --project=${{ matrix.project }}
-          else
-            npx playwright test --project=${{ matrix.project }}
-          fi
+          case "$SUITE" in
+            ""|all) npx playwright test --project=${{ matrix.project }} ;;
+            smoke)  npx playwright test --grep @smoke --project=${{ matrix.project }} ;;
+            *)      npx playwright test "tests/$SUITE/" --project=${{ matrix.project }} ;;
+          esac
         env:
+          SUITE: ${{ github.event.inputs.test_suite }}
           CI: true
           BASE_URL: ${{ secrets.BASE_URL || 'https://www.saucedemo.com' }}
           STANDARD_USER: ${{ secrets.STANDARD_USER || 'standard_user' }}
@@ -81,6 +101,7 @@ jobs:
 
   smoke-gate:
     name: Smoke Gate (pre-merge check)
+    needs: quality
     runs-on: ubuntu-latest
     timeout-minutes: 10
     if: github.event_name == 'pull_request'

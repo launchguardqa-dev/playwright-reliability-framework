@@ -55,6 +55,17 @@ export class BasePage {
     await expect(this.page).toHaveURL(new RegExp(path));
   }
 
+  /**
+   * Exact path check (ignores origin and query string).
+   * Prefer this over assertUrlContains for short paths like "/",
+   * which every URL "contains" and so can never fail.
+   */
+  async assertPathIs(path: string): Promise<void> {
+    await expect
+      .poll(() => new URL(this.page.url()).pathname, { message: `URL path should be "${path}"` })
+      .toBe(path);
+  }
+
   async assertUrlEquals(url: string): Promise<void> {
     await expect(this.page).toHaveURL(url);
   }
