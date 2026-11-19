@@ -102,7 +102,7 @@ This framework had a flaky test of its own, which is a good example of how these
 
 **Proof.** A script that clicks at controlled delays after page load reproduced it **6/6 at ~450ms** and 0/6 at every other delay.
 
-**Fix.** `NavigationPage.openMenu()` waits for the menu's settled closed state (`.bm-menu-wrap[hidden]` present) before clicking. That's a wait on a real condition, not a sleep. After the fix: 0/6 stuck at the 450ms delay, and 20/20 passes in the slow-motion stress run that previously failed about half the time.
+**Fix.** `NavigationPage.openMenu()` waits for the menu's settled closed state (`.bm-menu-wrap[hidden]` present) before clicking. That's a wait on a real condition, not a sleep. After the fix: **0/6** stuck at the same 450ms delay. The full slow-motion suite also passes again.
 
 **Takeaway.** A real user who clicks the menu about half a second after the page loads hits this same bug. Varying test timing (slow motion, a different machine) is a cheap way to shake out race conditions that a fast, consistent CI run never sees.
 
