@@ -13,7 +13,6 @@
     "baseUrl": ".",
     "paths": {
       "@pages/*": ["src/pages/*"],
-      "@utils/*": ["src/utils/*"],
       "@fixtures/*": ["src/fixtures/*"],
       "@constants/*": ["src/constants/*"]
     }

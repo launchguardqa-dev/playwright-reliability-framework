@@ -9,10 +9,14 @@ import { ROUTES } from '../../src/constants/routes';
  * Tagged @smoke so the critical path can run independently in CI.
  */
 test.describe('Authentication', () => {
+  test.beforeEach(async ({ loginPage }) => {
+    await loginPage.goto();
+  });
+
   test('should log in successfully with valid credentials @smoke', async ({ loginPage, inventoryPage }) => {
     await loginPage.login(USERS.STANDARD.username, USERS.STANDARD.password);
     await inventoryPage.assertOnInventoryPage();
-    await loginPage.assertUrlContains(ROUTES.INVENTORY);
+    await inventoryPage.assertPathIs(ROUTES.INVENTORY);
   });
 
   test('should show error for locked out user', async ({ loginPage }) => {
@@ -49,6 +53,6 @@ test.describe('Authentication', () => {
   test('should not navigate away from login page on failed login', async ({ loginPage }) => {
     await loginPage.login(USERS.INVALID.username, USERS.INVALID.password);
     await loginPage.assertOnLoginPage();
-    await loginPage.assertUrlContains(ROUTES.LOGIN);
+    await loginPage.assertPathIs(ROUTES.LOGIN);
   });
 });
