@@ -193,6 +193,11 @@ npm run test:flake-check
 # Headed (see the browser)
 npm run test:headed
 
+# Watch it run: installed Google Chrome, one test at a time
+npm run test:watch
+# ...in slow motion (PowerShell: $env:SLOW_MO=500; npm run test:watch)
+SLOW_MO=500 npm run test:watch
+
 # Debug mode
 npm run test:debug
 

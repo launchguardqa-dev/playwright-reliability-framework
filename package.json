@@ -13,6 +13,7 @@
     "test:sorting": "playwright test tests/sorting/",
     "test:flake-check": "playwright test --project=chromium --repeat-each=10 --retries=0",
     "test:headed": "playwright test --headed",
+    "test:watch": "playwright test --project=chrome --headed --workers=1",
     "test:debug": "playwright test --debug",
     "test:report": "playwright show-report",
     "test:ci": "playwright test --reporter=github,html",

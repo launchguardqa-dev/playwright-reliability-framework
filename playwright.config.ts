@@ -3,6 +3,8 @@ import * as dotenv from 'dotenv';
 
 dotenv.config();
 
+const slowMo = Number(process.env.SLOW_MO) || 0;
+
 /**
  * Playwright Configuration
  * LaunchGuard QA - playwright-reliability-framework
@@ -47,10 +49,13 @@ export default defineConfig({
     /* Generous but not infinite timeouts */
     actionTimeout: 10_000,
     navigationTimeout: 30_000,
+
+    /* Optional slow motion for watching runs: SLOW_MO=500 adds 500ms per action */
+    launchOptions: { slowMo: slowMo },
   },
 
-  /* Test timeout — 30s is reasonable for UI tests */
-  timeout: 30_000,
+  /* Test timeout — 30s is reasonable for UI tests; extended when slow motion is on */
+  timeout: slowMo ? 120_000 : 30_000,
 
   /* Expect timeout */
   expect: {
@@ -69,6 +74,19 @@ export default defineConfig({
     {
       name: 'webkit',
       use: { ...devices['Desktop Safari'] },
+    },
+    /*
+     * Branded Google Chrome (the installed browser, not Playwright's bundled
+     * Chromium). Useful for watching runs locally on machines where policy
+     * blocks unsigned binaries (e.g. Windows Smart App Control).
+     * Video is off here because recording needs Playwright's bundled ffmpeg,
+     * which the same policies block, and you're watching live anyway.
+     * Screenshots and traces still work.
+     * Not part of the CI matrix. Run: npm run test:watch
+     */
+    {
+      name: 'chrome',
+      use: { ...devices['Desktop Chrome'], channel: 'chrome', video: 'off' },
     },
     /* Mobile viewports for cross-device coverage */
     {
