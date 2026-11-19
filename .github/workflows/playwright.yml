@@ -26,7 +26,7 @@ on:
 jobs:
   quality:
     name: Lint + Typecheck
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
 
     steps:
@@ -45,7 +45,7 @@ jobs:
   test:
     name: Playwright (${{ matrix.project }})
     needs: quality
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
 
     strategy:
@@ -102,7 +102,7 @@ jobs:
   smoke-gate:
     name: Smoke Gate (pre-merge check)
     needs: quality
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     if: github.event_name == 'pull_request'
 
