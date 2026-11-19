@@ -16,6 +16,8 @@ export class NavigationPage extends BasePage {
   readonly logoutLink: Locator;
   readonly resetAppStateLink: Locator;
   readonly cartIcon: Locator;
+  /** The menu wrapper once the app's startup hide-timer has run (see openMenu). */
+  readonly settledClosedMenu: Locator;
 
   constructor(page: Page) {
     super(page);
@@ -27,11 +29,25 @@ export class NavigationPage extends BasePage {
     this.logoutLink = page.locator('[data-test="logout-sidebar-link"]');
     this.resetAppStateLink = page.locator('[data-test="reset-sidebar-link"]');
     this.cartIcon = page.locator('[data-test="shopping-cart-link"]');
+    this.settledClosedMenu = page.locator('.bm-menu-wrap[hidden]');
   }
 
   // ── Actions ──────────────────────────────────────────────
 
+  /**
+   * Opens the burger menu, avoiding a race condition in the app.
+   *
+   * The menu (react-burger-menu) starts a 500ms timer on page load that adds
+   * `hidden` to the menu. A click that lands right around that 500ms mark is
+   * overwritten by the timer: state says open (aria-hidden="false") but the
+   * menu stays `hidden`, so it never appears. Reproduced 6/6 with a click
+   * ~450ms after load; found via a SLOW_MO=500 run.
+   *
+   * Fix: wait for the settled closed state (`hidden` present) before
+   * clicking. This is a condition-based wait, not a sleep.
+   */
   async openMenu(): Promise<void> {
+    await this.settledClosedMenu.waitFor({ state: 'attached' });
     await this.clickElement(this.menuButton);
     await this.menuPanel.waitFor({ state: 'visible' });
   }

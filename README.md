@@ -94,6 +94,18 @@ This framework had a flaky test of its own, which is a good example of how these
 - Page fixtures never navigate during setup. A fixture that loads the login page can silently make a logout test pass.
 - Exact path assertions (`assertPathIs('/')`) replace "URL contains `/`", which could never fail.
 
+### A Real App Race Condition, Found in Slow Motion
+
+**Symptom.** Running the suite in slow motion (`SLOW_MO=500`), the burger-menu tests failed intermittently: the click succeeded, but the menu never opened. The failure snapshot showed a contradiction. The menu said it was open (`aria-hidden="false"`) but was still `hidden="true"`.
+
+**Root cause (in the app, not the tests).** On page load, the menu component starts a 500ms timer that adds `hidden` to the menu. Clicking the burger removes `hidden` and then flips the state to "open" on the next tick, which is supposed to cancel that timer. A click that lands right around the 500ms mark lets the timer fire in between: `hidden` is re-added after the menu is already marked open, so the menu is stuck. Slow motion added about 500ms before each click, which landed it right in that window.
+
+**Proof.** A script that clicks at controlled delays after page load reproduced it **6/6 at ~450ms** and 0/6 at every other delay.
+
+**Fix.** `NavigationPage.openMenu()` waits for the menu's settled closed state (`.bm-menu-wrap[hidden]` present) before clicking. That's a wait on a real condition, not a sleep. After the fix: 0/6 stuck at the 450ms delay, and 20/20 passes in the slow-motion stress run that previously failed about half the time.
+
+**Takeaway.** A real user who clicks the menu about half a second after the page loads hits this same bug. Varying test timing (slow motion, a different machine) is a cheap way to shake out race conditions that a fast, consistent CI run never sees.
+
 ---
 
 ## Tech Stack
