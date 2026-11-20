@@ -48,7 +48,8 @@ jobs:
     name: Playwright (${{ matrix.project }})
     needs: quality
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    # Worst case: 3 browser-install attempts (~13 min) + tests (~2-3 min)
+    timeout-minutes: 25
 
     strategy:
       fail-fast: false
@@ -68,8 +69,10 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Time-limited with retries: a stuck Ubuntu mirror used to hang this step until the
+      # whole job was cancelled (see scripts/ci-install-browsers.sh).
       - name: Install Playwright browsers
-        run: npx playwright install --with-deps ${{ matrix.project }}
+        run: bash scripts/ci-install-browsers.sh ${{ matrix.project }}
 
       - name: Run Playwright tests
         run: |
@@ -105,7 +108,7 @@ jobs:
     name: Smoke Gate (pre-merge check)
     needs: quality
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 20
     if: github.event_name == 'pull_request'
 
     steps:
@@ -116,7 +119,8 @@ jobs:
           cache: 'npm'
 
       - run: npm ci
-      - run: npx playwright install --with-deps chromium
+      - name: Install Playwright browsers
+        run: bash scripts/ci-install-browsers.sh chromium
 
       - name: Run smoke tests only
         run: npx playwright test --grep @smoke --project=chromium
