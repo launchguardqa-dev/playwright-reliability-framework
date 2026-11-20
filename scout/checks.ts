@@ -96,15 +96,19 @@ export function checkNetwork(events: PageEvents, url: string, origin: string): F
   const out: Finding[] = [];
   const seen = new Set<string>();
   for (const req of events.failedRequests) {
-    if (req.resourceType === 'document' || seen.has(req.url)) continue; // the page itself is checkHttp's job
-    seen.add(req.url);
+    // Identify a request by origin + path: analytics beacons put timestamps and IDs in the
+    // query string, which would otherwise turn one problem into one finding per request.
+    const u = new URL(req.url);
+    const endpoint = `${u.origin}${u.pathname}`;
+    if (req.resourceType === 'document' || seen.has(endpoint)) continue; // the page itself is checkHttp's job
+    seen.add(endpoint);
     const firstParty = req.url.startsWith(origin);
     out.push(finding({
       rule: firstParty ? 'network-error' : 'third-party-network-error',
       title: firstParty ? 'Failed request to this site' : 'Failed third-party request',
       severity: firstParty ? 'medium' : 'low',
       confidence: 'confirmed', category: 'network',
-      detail: `${req.resourceType} request returned ${req.status}: ${req.url}`,
+      detail: `${req.resourceType} request returned ${req.status}: ${endpoint}`,
       samples: [req.url],
     }, url));
   }

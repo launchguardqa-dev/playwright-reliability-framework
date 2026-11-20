@@ -1,6 +1,6 @@
 # playwright-reliability-framework
 
-> A Playwright + TypeScript automation framework built for reliability, maintainability, and CI stability. 91 tests across auth, cart, checkout, product, sorting, and navigation flows, a bug-detection matrix that proves the checks catch real defects, and LaunchGuard Scout, an automated QA scanner for any site. Gated by lint and typecheck in CI.
+> A Playwright + TypeScript automation framework built for reliability, maintainability, and CI stability. 94 tests across auth, cart, checkout, product, sorting, and navigation flows, a bug-detection matrix that proves the checks catch real defects, and LaunchGuard Scout, an automated QA scanner for any site. Gated by lint and typecheck in CI.
 
 [![Playwright Tests](https://github.com/launchguardqa-dev/playwright-reliability-framework/actions/workflows/playwright.yml/badge.svg)](https://github.com/launchguardqa-dev/playwright-reliability-framework/actions/workflows/playwright.yml)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue)
@@ -132,6 +132,9 @@ npm run scout -- https://example.com --authorized
 
 # Scan SauceDemo as a specific user (profile handles login and SPA routes)
 npm run scout -- --profile scout/profiles/saucedemo.json --authorized --username problem_user
+
+# Watch it work: opens a visible Chrome window (add --slow-mo 600 to slow it further)
+npm run scout -- https://the-internet.herokuapp.com/ --authorized --watch
 ```
 
 Output goes to `scout-reports/<host>-<timestamp>/`: `report.html` (light/dark, mobile-friendly), `findings.json`, and screenshots. Add `--fail-on high` to use it as a CI gate.
@@ -142,13 +145,20 @@ Output goes to `scout-reports/<host>-<timestamp>/`: `report.html` (light/dark, m
 
 ### Scout's own tests
 
-`tests/scout/` runs Scout against a local fixture site with **one planted bug per check** and a **clean control page that must produce zero findings**. To prove the tests can fail, two checks were deliberately sabotaged: disabling the image check failed the image test, and calling every page "slow" failed the clean-page test. Each sabotage was caught by exactly the test meant to catch it.
+`tests/scout/` runs Scout against a local fixture site with **one planted bug per check** and a **clean control page that must produce zero findings**. To prove the tests can fail, two checks were deliberately sabotaged: disabling the image check failed the image test, and calling every page "slow" failed the clean-page test. Each sabotage was caught by exactly the test meant to catch it. Every later false-positive fix (below) also got a fixture test, and each one was confirmed to fail on the code from before the fix.
 
 ### False positives found and fixed on real sites
 
-Running Scout on SauceDemo surfaced two false positives before release. Both were fixed by making the finding accurate, not by hiding it:
+Each new site Scout scans is a test of Scout itself. Every false positive below was fixed by making the finding accurate, not by hiding it.
+
+**SauceDemo** (single-page app):
 - **SPA routes served with HTTP 404.** SauceDemo's server answers 404 for routes like `/cart.html`, but the browser renders them normally. Scout first called these "broken links". It now reports them as one low-severity *"renders normally but returns an HTTP error status"* finding, which is still worth knowing because search engines treat those pages as missing.
 - **Cancelled requests.** Image loads cancelled when Scout moved to the next page (`ERR_ABORTED`) were reported as failures. Cancellations are now ignored; real failures (4xx/5xx, DNS, refused connections) still count.
+
+**the-internet.herokuapp.com** (classic multi-page site). The first scan reported 36 findings; after these fixes it reports 18, all real:
+- **One problem reported 15 times.** A dead analytics endpoint puts a timestamp in every request URL, so each page's failure looked "different". Requests are now identified by origin + path; it's one finding across 14 pages.
+- **Sign-in walls called "broken links."** `/basic_auth` returns 401, which is intended behavior. 401/403 pages now produce one *info* finding: "Pages require sign-in".
+- **Accessibility errors from the browser's own error screen.** axe ran on the blank 401 page and flagged its missing `<title>` and `lang`. Content checks are now skipped on error pages; their status is reported once instead.
 
 ### What it found on SauceDemo
 
@@ -238,7 +248,7 @@ playwright-reliability-framework/
 │   ├── product/product.spec.ts   # Product detail page (6)
 │   ├── sorting/sorting.spec.ts   # Sort order data integrity (6)
 │   ├── users/user-variants.spec.ts # 8 checks × 5 users: proves checks catch bugs (40)
-│   ├── scout/                    # Scout's own tests against a planted-bug fixture site (9)
+│   ├── scout/                    # Scout's own tests against a planted-bug fixture site (12)
 │   └── smoke/                    # @smoke tag docs
 ├── scout/                        # LaunchGuard Scout scanner (crawl, checks, report, CLI, profiles)
 ├── .claude/skills/qa-run/        # /qa-run Claude Code skill: AI triage on top of Scout

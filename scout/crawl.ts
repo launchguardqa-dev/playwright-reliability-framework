@@ -76,7 +76,11 @@ export async function runScout(options: ScoutOptions, existingBrowser?: Browser)
   const shotsDir = path.join(options.outDir, 'screenshots');
   fs.mkdirSync(shotsDir, { recursive: true });
 
-  const browser = existingBrowser ?? await chromium.launch();
+  // Watch mode uses the installed Google Chrome: some machines (e.g. Windows with
+  // Smart App Control) block Playwright's bundled browser from opening a window.
+  const browser = existingBrowser ?? await chromium.launch(options.watch
+    ? { headless: false, channel: 'chrome', slowMo: options.watch.slowMo }
+    : {});
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   const page = await context.newPage();
   const events = collectEvents(page);
@@ -103,6 +107,7 @@ export async function runScout(options: ScoutOptions, existingBrowser?: Browser)
     const referrers = new Map<string, Set<string>>(); // link target -> pages linking to it
     const statusByUrl = new Map<string, number | null>();
     const renderedDespiteError = new Set<string>();
+    const navFailures = new Map<string, string>(); // url -> error, for loads that failed outright
     const pages: PageResult[] = [];
     const allowed = (url: string) =>
       url.startsWith(origin) && !SKIP_EXTENSIONS.test(url) && !exclude.some((re) => re.test(url));
@@ -121,7 +126,11 @@ export async function runScout(options: ScoutOptions, existingBrowser?: Browser)
         const response = await page.goto(url, { waitUntil: 'load', timeout: 30_000 });
         status = response?.status() ?? null;
       } catch (e) {
-        log(`  navigation failed: ${(e as Error).message.split('\n')[0]}`);
+        const message = (e as Error).message.split('\n')[0];
+        log(`  navigation failed: ${message}`);
+        // A visible browser shows a sign-in prompt instead of a 401 page; treat it the same.
+        if (/AUTH/i.test(message)) status = 401;
+        else navFailures.set(url, message);
       }
       const loadMs = Date.now() - t0;
       // Give single-page apps a moment to render and surface late errors.
@@ -141,7 +150,11 @@ export async function runScout(options: ScoutOptions, existingBrowser?: Browser)
       const shot = nextShot();
       await page.screenshot({ path: shot.absolute, fullPage: true }).catch(() => {});
 
-      const findings: Finding[] = [
+      // On an error page (a 404, a 401 sign-in wall, a failed load) the browser is showing an
+      // error screen, not the site's content, so content checks would only produce noise.
+      // The status itself is reported once the crawl finishes.
+      const errorPage = status === null || (status >= 400 && !renderedDespiteError.has(url));
+      const findings: Finding[] = errorPage ? [] : [
         ...checkJavaScript(events, url),
         ...checkNetwork(events, url, origin),
         ...await checkImages(page, url),
@@ -182,8 +195,24 @@ export async function runScout(options: ScoutOptions, existingBrowser?: Browser)
           + 'Users are unaffected, but search engines and uptime monitors will treat these pages as missing.',
       });
     }
+    // 401/403/407 mean "sign in required", which is intended behavior, not breakage.
+    const authPages = [...statusByUrl].filter(([, s]) => s === 401 || s === 403 || s === 407).map(([u]) => u);
+    if (authPages.length) {
+      siteFindings.push({
+        rule: 'auth-required', title: 'Pages require sign-in', severity: 'info', confidence: 'confirmed',
+        category: 'http', pages: authPages,
+        detail: `${authPages.length} page(s) answered with a sign-in requirement (401/403), so Scout could not check them. `
+          + 'Give Scout a profile with login steps to include them.',
+      });
+    }
+    for (const [url, message] of navFailures) {
+      siteFindings.push({
+        rule: 'page-failed-to-load', title: 'Page failed to load', severity: 'high', confidence: 'confirmed',
+        category: 'http', pages: [url], detail: message,
+      });
+    }
     for (const [url, status] of statusByUrl) {
-      if (status === null || status < 400 || renderedDespiteError.has(url)) continue;
+      if (status === null || status < 400 || renderedDespiteError.has(url) || authPages.includes(url)) continue;
       const from = [...(referrers.get(url) ?? [])];
       if (from.length) {
         siteFindings.push({

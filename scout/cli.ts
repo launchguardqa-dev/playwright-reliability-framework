@@ -18,6 +18,8 @@ import { Profile, Severity } from './types';
  *   --out <dir>          Report folder (default scout-reports/<host>-<timestamp>).
  *   --username / --password   Login values for the profile (or SCOUT_USERNAME / SCOUT_PASSWORD).
  *   --fail-on <severity> Exit with code 1 if any finding is at or above this severity (for CI).
+ *   --watch              Open a visible Chrome window so you can watch the scan.
+ *   --slow-mo <ms>       Slowdown per browser action in watch mode (default 300).
  */
 
 const SEVERITIES: Severity[] = ['critical', 'high', 'medium', 'low', 'info'];
@@ -87,6 +89,7 @@ async function main() {
     outDir,
     username: typeof args.username === 'string' ? args.username : undefined,
     password: typeof args.password === 'string' ? args.password : undefined,
+    watch: args.watch ? { slowMo: Number(args['slow-mo'] ?? 300) } : undefined,
     log: (m) => console.log(`  ${m}`),
   });
 
