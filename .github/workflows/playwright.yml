@@ -23,6 +23,7 @@ on:
           - product
           - sorting
           - users
+          - scout
 
 jobs:
   quality:
