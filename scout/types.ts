@@ -82,6 +82,8 @@ export interface ScoutOptions {
   outDir: string;
   username?: string;
   password?: string;
+  /** Watch mode: a visible browser window with a slowdown per action (ms). */
+  watch?: { slowMo: number };
   /** Called with progress messages. */
   log?: (message: string) => void;
 }

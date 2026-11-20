@@ -24,7 +24,16 @@ export const PAGES: Record<string, string> = {
       <li><a href="/a11y.html">Accessibility</a></li>
       <li><a href="/slow.html">Slow</a></li>
       <li><a href="/missing.html">Missing page</a></li>
+      <li><a href="/private.html">Private page</a></li>
+      <li><a href="/beacons.html">Beacons</a></li>
     </ul>`),
+
+  // Three requests to one failing endpoint, differing only in the query string.
+  '/beacons.html': page('Beacons', `
+    <p>Sends analytics beacons with a timestamp, like real tracking scripts do.</p>
+    <script>
+      fetch('/api/beacon?t=1'); fetch('/api/beacon?t=2'); fetch('/api/beacon?t=3');
+    </script>`),
 
   // Control: must produce no findings at all.
   '/clean.html': page('Clean page', `
@@ -63,6 +72,17 @@ export const SLOW_DELAY_MS = 3_300;
 export async function startFixtureSite(): Promise<{ origin: string; close: () => Promise<void> }> {
   const server = http.createServer((req, res) => {
     const path = (req.url ?? '/').split('?')[0];
+    if (path === '/private.html') {
+      // A sign-in wall: intended behavior, not a broken page.
+      res.writeHead(401, { 'content-type': 'text/html', 'www-authenticate': 'Basic realm="fixture"' });
+      res.end('Not authorized');
+      return;
+    }
+    if (path === '/api/beacon') {
+      res.writeHead(500);
+      res.end();
+      return;
+    }
     if (path.startsWith('/img/') && path !== '/img/missing.png') {
       res.writeHead(200, { 'content-type': 'image/png' });
       res.end(PNG);

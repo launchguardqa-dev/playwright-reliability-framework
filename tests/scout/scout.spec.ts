@@ -82,6 +82,27 @@ test.describe('LaunchGuard Scout', () => {
     expect(httpError?.pages).toEqual([`${site.origin}/gone.html`]);
   });
 
+  test('treats a 401 sign-in wall as "requires sign-in", not a broken link', () => {
+    const auth = result.findings.find((f) => f.rule === 'auth-required');
+    expect(auth?.pages).toEqual([`${site.origin}/private.html`]);
+    expect(auth?.severity).toBe('info');
+    const brokenTargets = result.findings.filter((f) => f.rule === 'broken-link').flatMap((f) => f.samples ?? []);
+    expect(brokenTargets).not.toContain(`${site.origin}/private.html`);
+  });
+
+  test('reports one failing endpoint once, even with changing query strings', () => {
+    const beacon = on('/beacons.html').filter((f) => f.rule === 'network-error');
+    expect(beacon, 'exactly one finding for /api/beacon').toHaveLength(1);
+    expect(beacon[0].detail).toContain(`${site.origin}/api/beacon`);
+    expect(beacon[0].detail).not.toContain('?t=');
+  });
+
+  test('runs no content checks on error pages (404, 401)', () => {
+    expect(on('/missing.html'), 'the 404 page itself').toEqual([]);
+    expect(on('/private.html').map((f) => f.rule), 'the 401 page itself').toEqual(['auth-required']);
+    expect(on('/gone.html').map((f) => f.rule), 'unlinked 404 seed').toEqual(['http-error']);
+  });
+
   test('renders a report that escapes page content', () => {
     const html = renderHtml(result);
     expect(html).toContain('LaunchGuard Scout Report');
