@@ -14,6 +14,27 @@ export const USERS = {
     username: 'invalid_user',
     password: 'wrong_password',
   },
+
+  /*
+   * SauceDemo's deliberately broken accounts. They log in normally,
+   * then the app misbehaves. See tests/users/user-variants.spec.ts.
+   */
+  PROBLEM: {
+    username: 'problem_user',
+    password: process.env.TEST_PASSWORD ?? 'secret_sauce',
+  },
+  ERROR: {
+    username: 'error_user',
+    password: process.env.TEST_PASSWORD ?? 'secret_sauce',
+  },
+  PERFORMANCE_GLITCH: {
+    username: 'performance_glitch_user',
+    password: process.env.TEST_PASSWORD ?? 'secret_sauce',
+  },
+  VISUAL: {
+    username: 'visual_user',
+    password: process.env.TEST_PASSWORD ?? 'secret_sauce',
+  },
 } as const;
 
 export const ERROR_MESSAGES = {
