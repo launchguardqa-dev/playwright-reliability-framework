@@ -127,10 +127,21 @@ A suite that only ever passes can't tell you whether it would notice a broken ap
 
 **How it works:**
 - **`standard_user` is the control.** Every check must pass there, which proves the check itself is valid. A check that also "fails" on a working app proves nothing.
-- **Known bugs are marked `test.fail()`** with a description of the bug. CI stays green while the report documents each defect and the check that catches it. If SauceDemo ever fixes one, that test *unexpectedly passes* and fails the run, so the bug list can't silently go stale.
+- **Each known-bug test asserts two things:**
+  1. **The normal check fails.** This proves it catches the bug.
+  2. **The page shows that bug's exact signature.** For example, `problem_user`'s first-name field contains the *last* name, while `error_user`'s last-name handler throws `Cannot read properties of undefined (reading 'value')`.
+
+  Step 2 is what makes it strict. A bare `test.fail()` accepts *any* failure, so a site outage or a renamed button would still count as "bug caught." Here, if the bug is fixed, changes shape, or something unrelated breaks, the signature no longer matches and the test fails. CI stays green only while each bug behaves exactly as documented.
 - **`performance_glitch_user` must pass everything** despite a ~5s login and ~5s sorts. That only works because every wait is condition-based.
 - **Fail fast, never flaky.** Checks expected to fail use a 5s assertion timeout; working checks get 15s, so slow-but-correct behavior never trips them.
-- **Every bug was observed on the live site before writing tests,** not copied from documentation, and each expected failure was verified to fail *at the assertion meant to catch it*. That check caught two problems during development: a crash being counted as a "caught bug", and a price-order check that could pass on a partial read mid-render.
+- **Every bug was observed on the live site before writing tests** (3 runs per user), not copied from documentation.
+
+**Proving the strictness works (mutation test).** A temporary copy of the spec paired each bug list with the *wrong* user: `problem_user`'s bugs against `error_user` (same broken features, different symptoms), the reverse, and `visual_user`'s bugs against `standard_user` (simulating "bug fixed"). **All 16 mismatched tests failed.** A `test.fail()`-only version would have missed 12 of the 16, because the features were still broken, just differently.
+
+**What it caught during development:**
+- A crash in test code being counted as a "caught bug".
+- A price-order check that could pass on a partial mid-render read.
+- An exploration gap: `error_user` throws an error while *typing* the last name (the real cause of the dropped field), not just on Finish. The strict signature failed until it described the actual behavior.
 
 ---
 
