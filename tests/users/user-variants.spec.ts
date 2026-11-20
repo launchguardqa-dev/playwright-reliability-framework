@@ -66,8 +66,13 @@ const NOT_ADDABLE = [PRODUCTS.BOLT_TSHIRT, PRODUCTS.FLEECE_JACKET, PRODUCTS.RED_
 const SORT_BROKEN_ALERT = 'Sorting is broken! This error has been reported to Backtrace.';
 const ADD_FAILED_ERROR = 'Failed to add item to the cart.';
 const REMOVE_FAILED_ERROR = 'Failed to remove item from cart.';
-/** Thrown by error_user's last-name field handler; it's why the last name is dropped. */
-const LAST_NAME_INPUT_ERROR = "Cannot read properties of undefined (reading 'value')";
+/**
+ * Thrown by error_user's last-name field handler; it's why the last name is dropped.
+ * Browsers word the same TypeError differently, so match either:
+ *   Chromium: Cannot read properties of undefined (reading 'value')
+ *   Firefox:  can't access property "value", e.totallyUndefined is undefined
+ */
+const LAST_NAME_INPUT_ERROR = /^(Cannot read properties of undefined \(reading 'value'\)|can't access property "value", \S+ is undefined)$/;
 
 const count = (list: string[], message: string) => list.filter((m) => m === message).length;
 
@@ -232,7 +237,8 @@ const SIGNATURES = {
       await expect(checkout.firstNameInput).toHaveValue(CHECKOUT_INFO.VALID.firstName);
       await expect(checkout.lastNameInput).toHaveValue('');
       await expect(checkout.zipCodeInput).toHaveValue(CHECKOUT_INFO.VALID.zipCode);
-      expect(pageErrors, 'Only the last-name handler should throw').toEqual([LAST_NAME_INPUT_ERROR]);
+      expect(pageErrors, 'Only the last-name handler should throw').toHaveLength(1);
+      expect(pageErrors[0]).toMatch(LAST_NAME_INPUT_ERROR);
     },
     'complete an order': async ({ checkout, pageErrors }: Ctx) => {
       // Validation is bypassed (reached step two with no last name), then Finish throws
@@ -241,7 +247,7 @@ const SIGNATURES = {
       // Exactly two errors: the last-name handler, then Finish. The Finish message is
       // minified code ("wa.cesetRart is not a function"), so only its presence is asserted.
       expect(pageErrors, 'Last-name handler error, then one Finish error').toHaveLength(2);
-      expect(pageErrors[0]).toBe(LAST_NAME_INPUT_ERROR);
+      expect(pageErrors[0]).toMatch(LAST_NAME_INPUT_ERROR);
     },
   },
   visual: {
