@@ -53,4 +53,9 @@ export const PRODUCTS = {
     dataTestId: 'sauce-labs-onesie',
     price: '$7.99',
   },
+  RED_TSHIRT: {
+    name: 'Test.allTheThings() T-Shirt (Red)',
+    dataTestId: 'test.allthethings()-t-shirt-(red)',
+    price: '$15.99',
+  },
 } as const;
