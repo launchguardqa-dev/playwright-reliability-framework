@@ -1,6 +1,6 @@
 # playwright-reliability-framework
 
-> A Playwright + TypeScript automation framework built for reliability, maintainability, and CI stability. 82 tests across auth, cart, checkout, product, sorting, and navigation flows, plus a bug-detection matrix that proves the checks catch real defects. Gated by lint and typecheck in CI.
+> A Playwright + TypeScript automation framework built for reliability, maintainability, and CI stability. 91 tests across auth, cart, checkout, product, sorting, and navigation flows, a bug-detection matrix that proves the checks catch real defects, and LaunchGuard Scout, an automated QA scanner for any site. Gated by lint and typecheck in CI.
 
 [![Playwright Tests](https://github.com/launchguardqa-dev/playwright-reliability-framework/actions/workflows/playwright.yml/badge.svg)](https://github.com/launchguardqa-dev/playwright-reliability-framework/actions/workflows/playwright.yml)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue)
@@ -108,6 +108,60 @@ This framework had a flaky test of its own, which is a good example of how these
 
 ---
 
+## LaunchGuard Scout: Automated QA Scan for Any Site
+
+Scout scans a website and produces an evidence-backed QA report. It has two layers:
+
+1. **A deterministic scanner** (`scout/`, TypeScript + Playwright) that crawls the site and runs the same checks every time:
+
+   | Check | What it finds |
+   |---|---|
+   | HTTP status | Pages and links that return errors |
+   | JavaScript | Uncaught exceptions and console errors |
+   | Network | Failed requests to the site and to third parties |
+   | Images | Images that fail to load, "not found" placeholders, one file reused for many different items |
+   | Accessibility | WCAG 2.1 AA violations via axe-core |
+   | Mobile | Pages that scroll sideways at phone width (with a screenshot) |
+   | Performance | Slow page loads and slow logins |
+
+2. **An AI layer:** the `/qa-run` Claude Code skill (`.claude/skills/qa-run/`) runs the scanner, verifies heuristic findings against screenshots, merges findings that share a root cause, and writes a plain-language `qa-summary.md` ranked by user impact.
+
+```bash
+# Scan any site you're authorized to test
+npm run scout -- https://example.com --authorized
+
+# Scan SauceDemo as a specific user (profile handles login and SPA routes)
+npm run scout -- --profile scout/profiles/saucedemo.json --authorized --username problem_user
+```
+
+Output goes to `scout-reports/<host>-<timestamp>/`: `report.html` (light/dark, mobile-friendly), `findings.json`, and screenshots. Add `--fail-on high` to use it as a CI gate.
+
+**Safety rules, enforced in code:** it refuses to run without `--authorized`; it stays on the target's origin; it's read-only (it never clicks or submits anything except login steps you configure); and it's polite (15-page limit, 750ms between loads).
+
+**Every finding carries a confidence level:** *confirmed* (directly observed), *likely* (strong signal, like an axe violation), or *heuristic* (a pattern worth a human look). Heuristics are labeled as such, never presented as fact.
+
+### Scout's own tests
+
+`tests/scout/` runs Scout against a local fixture site with **one planted bug per check** and a **clean control page that must produce zero findings**. To prove the tests can fail, two checks were deliberately sabotaged: disabling the image check failed the image test, and calling every page "slow" failed the clean-page test. Each sabotage was caught by exactly the test meant to catch it.
+
+### False positives found and fixed on real sites
+
+Running Scout on SauceDemo surfaced two false positives before release. Both were fixed by making the finding accurate, not by hiding it:
+- **SPA routes served with HTTP 404.** SauceDemo's server answers 404 for routes like `/cart.html`, but the browser renders them normally. Scout first called these "broken links". It now reports them as one low-severity *"renders normally but returns an HTTP error status"* finding, which is still worth knowing because search engines treat those pages as missing.
+- **Cancelled requests.** Image loads cancelled when Scout moved to the next page (`ERR_ABORTED`) were reported as failures. Cancellations are now ignored; real failures (4xx/5xx, DNS, refused connections) still count.
+
+### What it found on SauceDemo
+
+| User | Scout's findings |
+|---|---|
+| `standard_user` | Only the accurate low-severity 404-status note (no false alarms) |
+| `problem_user` | All 6 product images are "not found" placeholders sharing one file |
+| `visual_user` | The Backpack image is a "not found" placeholder |
+| `performance_glitch_user` | Slow login (5.2s) |
+| `error_user` | **"This component failed to render!" on product detail pages.** The screenshot confirms the product description is missing. Neither manual exploration nor the 82-test suite had caught this. |
+
+---
+
 ## Do These Tests Actually Catch Bugs?
 
 A suite that only ever passes can't tell you whether it would notice a broken app. SauceDemo ships deliberately broken accounts that log in normally and then misbehave, so `tests/users/user-variants.spec.ts` runs the **same 8 checks against all of them**:
@@ -184,7 +238,10 @@ playwright-reliability-framework/
 │   ├── product/product.spec.ts   # Product detail page (6)
 │   ├── sorting/sorting.spec.ts   # Sort order data integrity (6)
 │   ├── users/user-variants.spec.ts # 8 checks × 5 users: proves checks catch bugs (40)
+│   ├── scout/                    # Scout's own tests against a planted-bug fixture site (9)
 │   └── smoke/                    # @smoke tag docs
+├── scout/                        # LaunchGuard Scout scanner (crawl, checks, report, CLI, profiles)
+├── .claude/skills/qa-run/        # /qa-run Claude Code skill: AI triage on top of Scout
 ├── reports/                      # HTML report output (gitignored)
 ├── .github/workflows/
 │   └── playwright.yml            # Lint/typecheck gate, browser matrix, smoke gate

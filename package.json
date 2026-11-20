@@ -12,17 +12,20 @@
     "test:product": "playwright test tests/product/",
     "test:sorting": "playwright test tests/sorting/",
     "test:users": "playwright test tests/users/",
+    "test:scout": "playwright test tests/scout/",
     "test:flake-check": "playwright test --project=chromium --repeat-each=10 --retries=0",
     "test:headed": "playwright test --headed",
     "test:watch": "playwright test --project=chrome --headed --workers=1",
     "test:debug": "playwright test --debug",
     "test:report": "playwright show-report",
     "test:ci": "playwright test --reporter=github,html",
+    "scout": "tsx scout/cli.ts",
     "lint": "eslint . --ext .ts",
     "lint:fix": "eslint . --ext .ts --fix",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.14.0",
     "@playwright/test": "^1.44.0",
     "@types/node": "^20.0.0",
     "@typescript-eslint/eslint-plugin": "^7.0.0",
@@ -30,6 +33,7 @@
     "dotenv": "^16.4.0",
     "eslint": "^8.57.0",
     "eslint-plugin-playwright": "^1.8.3",
+    "tsx": "^4.23.15",
     "typescript": "^5.4.0"
   },
   "engines": {

@@ -10,3 +10,6 @@ reports/
 /blob-report/
 /playwright/.cache/
 .DS_Store
+
+# LaunchGuard Scout output
+scout-reports/

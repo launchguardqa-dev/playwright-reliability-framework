@@ -30,5 +30,18 @@ module.exports = {
     // legitimately contain no direct expect() calls.
     'playwright/expect-expect': 'off',
   },
-  ignorePatterns: ['node_modules/', 'reports/', 'dist/', '.eslintrc.cjs'],
+  overrides: [
+    {
+      // Scout is a general-purpose crawler, not a test suite. On an unknown
+      // site there is no specific element to wait for, so network-idle and
+      // bulk DOM reads are the right tools. Missing-await rules still apply.
+      files: ['scout/**/*.ts'],
+      rules: {
+        'playwright/no-networkidle': 'off',
+        'playwright/no-eval': 'off',
+        'playwright/no-wait-for-selector': 'off',
+      },
+    },
+  ],
+  ignorePatterns: ['node_modules/', 'reports/', 'dist/', 'scout-reports/', '.eslintrc.cjs'],
 };

@@ -1,0 +1,22 @@
+{
+  "name": "saucedemo",
+  "startUrl": "https://www.saucedemo.com/inventory.html",
+  "paths": [
+    "/inventory-item.html?id=4",
+    "/inventory-item.html?id=0",
+    "/cart.html",
+    "/checkout-step-one.html"
+  ],
+  "exclude": ["logout", "reset"],
+  "login": {
+    "url": "https://www.saucedemo.com/",
+    "username": "standard_user",
+    "password": "secret_sauce",
+    "steps": [
+      { "fill": "[data-test=\"username\"]", "value": "{{username}}" },
+      { "fill": "[data-test=\"password\"]", "value": "{{password}}" },
+      { "click": "[data-test=\"login-button\"]" }
+    ],
+    "successSelector": "[data-test=\"inventory-list\"]"
+  }
+}
