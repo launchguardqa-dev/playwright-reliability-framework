@@ -1,0 +1,2 @@
+# Shell scripts run on Linux CI runners: always store and check out with LF line endings
+*.sh text eol=lf
