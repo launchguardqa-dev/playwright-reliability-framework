@@ -67,6 +67,13 @@ test.describe('LaunchGuard Scout', () => {
     expect(rulesOn('/a11y.html')).toEqual(expect.arrayContaining(['a11y:image-alt', 'a11y:label', 'a11y:html-has-lang']));
   });
 
+  test('merges one accessibility rule across pages with different element counts', () => {
+    const label = result.findings.filter((f) => f.rule === 'a11y:label');
+    expect(label, 'one finding, not one per page').toHaveLength(1);
+    expect(label[0].pages).toEqual(expect.arrayContaining([`${site.origin}/a11y.html`, `${site.origin}/a11y-more.html`]));
+    expect(label[0].samples!.length, 'evidence from both pages kept').toBeGreaterThanOrEqual(3);
+  });
+
   test('flags slow pages', () => {
     expect(rulesOn('/slow.html')).toContain('slow-page');
   });
@@ -95,6 +102,12 @@ test.describe('LaunchGuard Scout', () => {
     expect(beacon, 'exactly one finding for /api/beacon').toHaveLength(1);
     expect(beacon[0].detail).toContain(`${site.origin}/api/beacon`);
     expect(beacon[0].detail).not.toContain('?t=');
+  });
+
+  test('reports a 401 background request as info, not a failed request', () => {
+    const findings = on('/beacons.html');
+    const me = findings.filter((f) => f.detail.includes('/api/me'));
+    expect(me.map((f) => [f.rule, f.severity])).toEqual([['auth-required-request', 'info']]);
   });
 
   test('runs no content checks on error pages (404, 401)', () => {

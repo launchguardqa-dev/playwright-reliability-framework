@@ -1,6 +1,6 @@
 # playwright-reliability-framework
 
-> A Playwright + TypeScript automation framework built for reliability, maintainability, and CI stability. 94 tests across auth, cart, checkout, product, sorting, and navigation flows, a bug-detection matrix that proves the checks catch real defects, and LaunchGuard Scout, an automated QA scanner for any site. Gated by lint and typecheck in CI.
+> A Playwright + TypeScript automation framework built for reliability, maintainability, and CI stability. 108 tests across auth, cart, checkout, product, sorting, and navigation flows, a bug-detection matrix that proves the checks catch real defects, and LaunchGuard Scout, an automated QA scanner for any site. Gated by lint and typecheck in CI.
 
 [![Playwright Tests](https://github.com/launchguardqa-dev/playwright-reliability-framework/actions/workflows/playwright.yml/badge.svg)](https://github.com/launchguardqa-dev/playwright-reliability-framework/actions/workflows/playwright.yml)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue)
@@ -160,6 +160,13 @@ Each new site Scout scans is a test of Scout itself. Every false positive below 
 - **Sign-in walls called "broken links."** `/basic_auth` returns 401, which is intended behavior. 401/403 pages now produce one *info* finding: "Pages require sign-in".
 - **Accessibility errors from the browser's own error screen.** axe ran on the blank 401 page and flagged its missing `<title>` and `lang`. Content checks are now skipped on error pages; their status is reported once instead.
 
+**practicesoftwaretesting.com** (Angular store with a separate API subdomain):
+- **The site's own API called "third-party."** First-party was decided by URL prefix, so `api.practicesoftwaretesting.com` didn't count as the site. Worse, the prefix check would have treated a look-alike like `shop.com.evil.net` as first-party. Now hostnames are compared: the site's domain and its subdomains are first-party (the old rule got 4 of 5 test cases wrong).
+- **One accessibility issue split into two findings.** The description included a per-page element count ("1 element" vs "3 elements"), so identical problems didn't merge. Counts moved out of the description, and merged findings now combine their evidence.
+- **A signed-out session check rated as a failure.** Once the API was correctly first-party, its expected 401 ("who's signed in?") showed up as a medium "failed request". Background 401/403 responses are now *info*, matching how 401 pages are reported.
+
+Real issues it found there, verified on the live site: a JavaScript crash on the Special Tools category (the "By category" filter renders empty and no products show), a show-password button with no accessible name, and a language button whose visible text ("EN") doesn't match its accessible name.
+
 ### What it found on SauceDemo
 
 | User | Scout's findings |
@@ -248,7 +255,7 @@ playwright-reliability-framework/
 │   ├── product/product.spec.ts   # Product detail page (6)
 │   ├── sorting/sorting.spec.ts   # Sort order data integrity (6)
 │   ├── users/user-variants.spec.ts # 8 checks × 5 users: proves checks catch bugs (40)
-│   ├── scout/                    # Scout's own tests against a planted-bug fixture site (12)
+│   ├── scout/                    # Scout's own tests against a planted-bug fixture site + unit tests (26)
 │   └── smoke/                    # @smoke tag docs
 ├── scout/                        # LaunchGuard Scout scanner (crawl, checks, report, CLI, profiles)
 ├── .claude/skills/qa-run/        # /qa-run Claude Code skill: AI triage on top of Scout

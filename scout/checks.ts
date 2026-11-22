@@ -92,6 +92,30 @@ export function checkJavaScript(events: PageEvents, url: string): Finding[] {
   return out;
 }
 
+/**
+ * Is `requestUrl` part of the scanned site, rather than a third party?
+ *
+ * The site's domain is the target's hostname minus a leading "www.". A request
+ * counts as first-party if its host is that domain or a subdomain of it, so
+ * api.shop.com and cdn.shop.com belong to shop.com. Hostnames are compared,
+ * not URL prefixes: a prefix check would treat shop.com.evil.net as shop.com.
+ *
+ * Deliberately conservative: a sibling like api.example.com when scanning
+ * app.example.com is reported as third-party, because without the public suffix
+ * list we can't tell example.com from co.uk. Erring this way never hides a
+ * third-party failure as first-party.
+ */
+export function isFirstParty(requestUrl: string, siteUrl: string): boolean {
+  let host: string;
+  try {
+    host = new URL(requestUrl).hostname.toLowerCase();
+  } catch {
+    return false;
+  }
+  const site = new URL(siteUrl).hostname.toLowerCase().replace(/^www\./, '');
+  return host === site || host.endsWith(`.${site}`);
+}
+
 export function checkNetwork(events: PageEvents, url: string, origin: string): Finding[] {
   const out: Finding[] = [];
   const seen = new Set<string>();
@@ -102,7 +126,19 @@ export function checkNetwork(events: PageEvents, url: string, origin: string): F
     const endpoint = `${u.origin}${u.pathname}`;
     if (req.resourceType === 'document' || seen.has(endpoint)) continue; // the page itself is checkHttp's job
     seen.add(endpoint);
-    const firstParty = req.url.startsWith(origin);
+    const firstParty = isFirstParty(req.url, origin);
+    if (req.status === 401 || req.status === 403) {
+      // Usually a "who's signed in?" check failing for a signed-out visitor: expected
+      // behavior, matching how 401/403 pages are reported (auth-required, info).
+      out.push(finding({
+        rule: 'auth-required-request', title: 'Background request needs sign-in',
+        severity: 'info', confidence: 'confirmed', category: 'network',
+        detail: `${req.resourceType} request returned ${req.status}: ${endpoint}. Normal for signed-out visitors `
+          + '(often a session check), but worth confirming nothing visible depends on it.',
+        samples: [req.url],
+      }, url));
+      continue;
+    }
     out.push(finding({
       rule: firstParty ? 'network-error' : 'third-party-network-error',
       title: firstParty ? 'Failed request to this site' : 'Failed third-party request',
@@ -172,7 +208,9 @@ export async function checkAccessibility(page: Page, url: string): Promise<Findi
     severity: AXE_SEVERITY[v.impact ?? 'moderate'] ?? 'medium',
     confidence: 'likely',
     category: 'accessibility',
-    detail: `${v.description} (${v.nodes.length} element${v.nodes.length === 1 ? '' : 's'}, impact: ${v.impact ?? 'unknown'})`,
+    // No per-page element count in the detail: the same rule on two pages with different
+    // counts must merge into one finding. The affected elements are listed in `samples`.
+    detail: `${v.description} (impact: ${v.impact ?? 'unknown'})`,
     samples: v.nodes.slice(0, 5).map((n) => n.target.join(' ')),
     helpUrl: v.helpUrl,
   }, url));
