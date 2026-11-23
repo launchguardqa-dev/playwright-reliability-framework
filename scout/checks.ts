@@ -92,12 +92,16 @@ export function thirdPartyHost(source: string | undefined, origin: string): stri
  * about someone else's resource (so the script URL points at the site, not the culprit):
  *   Chromium: Access to font at 'https://fonts.gstatic.com/x.woff2' from origin '...' has been blocked by CORS policy
  *   Firefox:  Cross-Origin Request Blocked: ... reading the remote resource at https://maps.googleapis.com/x. (Reason: ...)
+ *   Firefox:  [JavaScript Error: "downloadable font: rejected by sanitizer (...) source: https://fonts.gstatic.com/x.woff2"]
  */
 export function resourceUrlInMessage(text: string): string | undefined {
   const quoted = /^(?:Access to [\w ]+ at|[\w ]*(?:Failed|Unable) to load [\w ]*from|Refused to [\w ]+) '(https?:\/\/[^']+)'/i.exec(text);
   if (quoted) return quoted[1];
-  const firefox = /remote resource at (https?:\/\/\S+?)\.? \(Reason:/i.exec(text);
-  return firefox?.[1];
+  const firefoxCors = /remote resource at (https?:\/\/\S+?)\.? \(Reason:/i.exec(text);
+  if (firefoxCors) return firefoxCors[1];
+  // Firefox reports resource problems (fonts, stylesheets, images) with the resource's URL as "source: <url>".
+  const firefoxSource = /\bsource: (https?:\/\/[^\s"\]]+)/i.exec(text);
+  return firefoxSource?.[1];
 }
 
 /**

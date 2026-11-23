@@ -160,14 +160,24 @@ test.describe('Scout: console errors about third-party resources', () => {
   const chromiumCors = "Access to font at 'https://fonts.gstatic.com/s/x.woff2' from origin 'https://www.city.gov' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource.";
   const firefoxCors = 'Cross-Origin Request Blocked: The Same Origin Policy disallows reading the remote resource at https://maps.googleapis.com/maps/api/js. (Reason: CORS preflight response did not succeed).';
 
+  // Verbatim format from a Firefox CI run (host changed): a broken web font.
+  const firefoxFont = '[JavaScript Error: "downloadable font: rejected by sanitizer (font-family: "CityFont" style:normal weight:400 stretch:100 src index:0) source: https://fonts.gstatic.com/s/x.woff2"]';
+
   test('finds the resource a browser error is about', () => {
     expect(resourceUrlInMessage(chromiumCors)).toBe('https://fonts.gstatic.com/s/x.woff2');
     expect(resourceUrlInMessage(firefoxCors)).toBe('https://maps.googleapis.com/maps/api/js');
+    expect(resourceUrlInMessage(firefoxFont)).toBe('https://fonts.gstatic.com/s/x.woff2');
     expect(resourceUrlInMessage('TypeError: x is undefined')).toBeUndefined();
   });
 
   test("attributes a CORS error the page logs about someone else's resource to that host", () => {
     const events = { consoleErrors: [{ text: chromiumCors, source: site }], pageErrors: [], failedRequests: [] };
+    const [f] = checkJavaScript(events, site, site);
+    expect(f).toMatchObject({ rule: 'third-party-console-error', thirdParty: 'fonts.gstatic.com', severity: 'low' });
+  });
+
+  test('attributes a Firefox resource error ("source: <url>") to that host', () => {
+    const events = { consoleErrors: [{ text: firefoxFont }], pageErrors: [], failedRequests: [] };
     const [f] = checkJavaScript(events, site, site);
     expect(f).toMatchObject({ rule: 'third-party-console-error', thirdParty: 'fonts.gstatic.com', severity: 'low' });
   });

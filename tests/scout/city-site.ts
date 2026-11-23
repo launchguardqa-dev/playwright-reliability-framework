@@ -13,7 +13,8 @@ import { LoggedRequest } from './fixture-site';
  *   third-party: it has an unnamed button, logs a console error and makes a failing request.
  *   A second, untitled player iframe is also embedded.
  * - The site's own content has one real problem: a logo image with no alt text.
- * - The homepage also loads a web font and fetches JSON from that third party, which, like
+ * - The homepage also loads a CORS-mode stylesheet (standing in for a web font; a fake font
+ *   file would be rejected by Firefox's font sanitizer) and fetches JSON from that third party, which, like
  *   real CDNs, allows simple CORS requests but REJECTS preflights. Any non-safelisted header
  *   Scout adds to those requests (e.g. From) would make them fail.
  */
@@ -37,7 +38,9 @@ const HOME_BODY = (embedOrigin: string) => `
   and every meeting is streamed live and archived below for residents who cannot attend.</p>
   <iframe title="City Council meeting video" src="${embedOrigin}/player" width="320" height="180"></iframe>
   <iframe src="${embedOrigin}/player?autoplay=0" width="320" height="180"></iframe>
-  <style>@font-face { font-family: CityFont; src: url("${embedOrigin}/font.woff2"); } .notice { font-family: CityFont, sans-serif; }</style>
+  <!-- crossorigin makes this a CORS-mode request, like a web font from a font CDN. A valid
+       stylesheet (unlike a stand-in font file) won't trip any browser's resource validation. -->
+  <link rel="stylesheet" href="${embedOrigin}/brand.css" crossorigin="anonymous">
   <p class="notice">Office hours change for the holidays.</p>
   <p id="alerts">Loading alerts…</p>
   <script>
@@ -82,9 +85,9 @@ export async function startCitySite(): Promise<{
       res.end();
       return;
     }
-    if (path === '/font.woff2') {
-      res.writeHead(200, { 'content-type': 'font/woff2', 'access-control-allow-origin': '*' });
-      res.end(Buffer.alloc(64));
+    if (path === '/brand.css') {
+      res.writeHead(200, { 'content-type': 'text/css', 'access-control-allow-origin': '*' });
+      res.end('.notice { font-weight: bold; }');
       return;
     }
     if (path === '/api/alerts') {

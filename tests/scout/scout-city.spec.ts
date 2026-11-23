@@ -165,8 +165,8 @@ test.describe('Scout on a city site: identification headers', () => {
     const methods = site.thirdPartyRequests.map((r) => r.method);
     expect(methods, 'a preflight means Scout added a non-safelisted header').not.toContain('OPTIONS');
     const fetched = site.thirdPartyRequests.filter((r) => r.method === 'GET').map((r) => r.path);
-    expect(fetched).toEqual(expect.arrayContaining(['/font.woff2', '/api/alerts']));
-    const corsNoise = result.findings.filter((f) => /CORS|font\.woff2|\/api\/alerts/.test(`${f.detail} ${(f.samples ?? []).join(' ')}`));
+    expect(fetched).toEqual(expect.arrayContaining(['/brand.css', '/api/alerts']));
+    const corsNoise = result.findings.filter((f) => /CORS|brand\.css|\/api\/alerts/.test(`${f.detail} ${(f.samples ?? []).join(' ')}`));
     expect(corsNoise, 'no findings caused by Scout itself').toEqual([]);
   });
 });
