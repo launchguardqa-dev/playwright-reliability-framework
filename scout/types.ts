@@ -20,7 +20,8 @@ export type Category =
   | 'links'
   | 'accessibility'
   | 'mobile'
-  | 'performance';
+  | 'performance'
+  | 'pdf';
 
 export interface Finding {
   /** Stable rule id, e.g. "js-error" or "a11y:image-alt". */
@@ -39,7 +40,34 @@ export interface Finding {
   screenshot?: string;
   /** Link to documentation (axe rules). */
   helpUrl?: string;
+  /** WCAG 2.x success criteria this finding relates to, e.g. ["1.1.1"]. */
+  wcag?: string[];
 }
+
+/** What Scout learned about one PDF document. */
+export interface PdfResult {
+  url: string;
+  /** HTML pages that link to this PDF. */
+  linkedFrom: string[];
+  /** Size from Content-Length, when the server reports it. */
+  bytes?: number;
+  /** False when only metadata was fetched (public scan) or the file was skipped. */
+  analyzed: boolean;
+  skippedReason?: string;
+  pages?: number;
+  /** Tagged = has a structure tree AND MarkInfo/Marked is true. */
+  tagged?: boolean;
+  title?: string;
+  lang?: string;
+  /** full: every page has text · partial: some pages are image-only · none: scanned · empty: no content. */
+  textLayer?: 'full' | 'partial' | 'none' | 'empty';
+  /** Pages with images but no fonts (likely scanned). */
+  imageOnlyPages?: number;
+  encrypted?: boolean;
+  error?: string;
+}
+
+export type ScanMode = 'authorized' | 'public';
 
 export interface PageResult {
   url: string;
@@ -84,6 +112,15 @@ export interface ScoutOptions {
   password?: string;
   /** Watch mode: a visible browser window with a slowdown per action (ms). */
   watch?: { slowMo: number };
+  /**
+   * authorized (default): you have permission; full crawl, PDFs downloaded and analyzed.
+   * public: no permission; strictly limited sample of what any visitor sees (see crawl.ts).
+   */
+  mode?: ScanMode;
+  /** Contact email sent in the User-Agent and From header. Required for public scans. */
+  contact?: string;
+  /** Max PDFs to download and analyze in authorized mode (default 20). */
+  maxPdfs?: number;
   /** Called with progress messages. */
   log?: (message: string) => void;
 }
@@ -97,4 +134,9 @@ export interface ScoutResult {
   pages: PageResult[];
   /** Deduplicated across pages and sorted by severity. */
   findings: Finding[];
+  mode: ScanMode;
+  /** PDF documents linked from the scanned pages. */
+  pdfs: PdfResult[];
+  /** robots.txt handling (public scans always check it). */
+  robots?: { checked: boolean; skipped: string[] };
 }

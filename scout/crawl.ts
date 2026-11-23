@@ -3,9 +3,11 @@ import * as path from 'path';
 import { Browser, chromium, Page } from '@playwright/test';
 import {
   collectEvents, checkHttp, checkJavaScript, checkNetwork, checkImages,
-  checkAccessibility, checkMobile, checkPerformance,
+  checkAccessibility, checkMobile, checkPerformance, isFirstParty,
 } from './checks';
-import { Finding, PageResult, ScoutOptions, ScoutResult, Severity, Confidence } from './types';
+import { analyzePdf, looksLikePdfLink, pdfFindings } from './pdf';
+import { fetchRobots, Robots, SCOUT_TOKEN } from './robots';
+import { Finding, PageResult, PdfResult, ScoutOptions, ScoutResult, Severity, Confidence } from './types';
 
 /**
  * Crawls a site and runs every check on each page.
@@ -15,7 +17,23 @@ import { Finding, PageResult, ScoutOptions, ScoutResult, Severity, Confidence } 
  * - Read-only: Scout navigates with GET and never clicks or submits anything,
  *   except the login steps the operator explicitly configures in a profile.
  * - Polite: a delay between page loads and a hard page limit.
+ *
+ * Public scans (mode "public", for sites you have NOT been given permission to test)
+ * are stricter, and the limits are enforced here so no caller can bypass them:
+ * - At most PUBLIC_MAX_PAGES pages (the start page plus 2 more).
+ * - At least PUBLIC_MIN_DELAY_MS between requests (or the site's Crawl-delay, if longer).
+ * - robots.txt is obeyed; if the start page is disallowed, the scan refuses to run.
+ * - Identified: the User-Agent names the tool and a contact address, also sent as From.
+ * - No login profiles, no broken-link checking of unvisited pages.
+ * - PDFs are never downloaded: at most PUBLIC_MAX_PDF_HEADS HEAD requests for size.
  */
+
+export const PUBLIC_MAX_PAGES = 3;
+export const PUBLIC_MIN_DELAY_MS = 5_000;
+export const PUBLIC_MAX_PDF_HEADS = 5;
+const MAX_CRAWL_DELAY_MS = 30_000;
+const DEFAULT_MAX_PDFS = 20;
+const MAX_PDF_BYTES = 25 * 1024 * 1024;
 
 const SKIP_EXTENSIONS = /\.(pdf|zip|gz|dmg|exe|msi|png|jpe?g|gif|svg|webp|mp4|mp3|woff2?|css|js)(\?|$)/i;
 const SEVERITY_ORDER: Severity[] = ['critical', 'high', 'medium', 'low', 'info'];
@@ -73,10 +91,24 @@ export function dedupe(findings: Finding[]): Finding[] {
     || b.pages.length - a.pages.length);
 }
 
+/** User-Agent that identifies Scout. Keeps the "Mozilla/5.0 (compatible; ...)" form crawlers use. */
+export function scoutUserAgent(contact: string): string {
+  return `Mozilla/5.0 (compatible; ${SCOUT_TOKEN}/1.0; accessibility audit; contact: ${contact})`;
+}
+
 export async function runScout(options: ScoutOptions, existingBrowser?: Browser): Promise<ScoutResult> {
   const log = options.log ?? (() => {});
   const { profile } = options;
   const origin = new URL(profile.startUrl).origin;
+  const mode = options.mode ?? 'authorized';
+  const isPublic = mode === 'public';
+
+  if (isPublic) {
+    if (!options.contact) throw new Error('Public scans require a contact email (--contact) so site owners can reach you.');
+    if (profile.login) throw new Error('Public scans cannot use login steps: only pages any visitor can see are allowed.');
+  }
+  const maxPages = isPublic ? Math.min(options.maxPages, PUBLIC_MAX_PAGES) : options.maxPages;
+  let delayMs = isPublic ? Math.max(options.delayMs, PUBLIC_MIN_DELAY_MS) : options.delayMs;
   const exclude = (profile.exclude ?? []).map((p) => new RegExp(p, 'i'));
   const shotsDir = path.join(options.outDir, 'screenshots');
   fs.mkdirSync(shotsDir, { recursive: true });
@@ -86,7 +118,12 @@ export async function runScout(options: ScoutOptions, existingBrowser?: Browser)
   const browser = existingBrowser ?? await chromium.launch(options.watch
     ? { headless: false, channel: 'chrome', slowMo: options.watch.slowMo }
     : {});
-  const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const context = await browser.newContext({
+    viewport: { width: 1280, height: 800 },
+    ...(options.contact
+      ? { userAgent: scoutUserAgent(options.contact), extraHTTPHeaders: { From: options.contact } }
+      : {}),
+  });
   const page = await context.newPage();
   const events = collectEvents(page);
   const startedAt = new Date();
@@ -98,6 +135,29 @@ export async function runScout(options: ScoutOptions, existingBrowser?: Browser)
   };
 
   try {
+    let robots: Robots | undefined;
+    const robotsSkipped: string[] = [];
+    if (isPublic) {
+      robots = await fetchRobots(async (url) => {
+        const res = await context.request.get(url, { timeout: 15_000, maxRedirects: 3 }).catch(() => null);
+        return res ? { status: res.status(), text: await res.text().catch(() => '') } : null;
+      }, origin);
+      log(`robots.txt: ${robots.status}`);
+      if (!robots.isAllowed(profile.startUrl)) {
+        throw new Error(robots.status === 'unreachable'
+          ? 'robots.txt could not be fetched (server error), so a public scan will not proceed.'
+          : `robots.txt does not allow ${profile.startUrl}, so a public scan will not proceed.`);
+      }
+      if (robots.crawlDelaySeconds) {
+        delayMs = Math.max(delayMs, Math.min(robots.crawlDelaySeconds * 1000, MAX_CRAWL_DELAY_MS));
+      }
+    }
+    const robotsAllow = (url: string) => {
+      if (!robots || robots.isAllowed(url)) return true;
+      robotsSkipped.push(url);
+      return false;
+    };
+
     let loginMs: number | undefined;
     if (profile.login) {
       log(`Logging in at ${profile.login.url}`);
@@ -113,17 +173,22 @@ export async function runScout(options: ScoutOptions, existingBrowser?: Browser)
     const statusByUrl = new Map<string, number | null>();
     const renderedDespiteError = new Set<string>();
     const navFailures = new Map<string, string>(); // url -> error, for loads that failed outright
+    const pdfLinks = new Map<string, Set<string>>(); // pdf url -> pages linking to it
     const pages: PageResult[] = [];
     const allowed = (url: string) =>
       url.startsWith(origin) && !SKIP_EXTENSIONS.test(url) && !exclude.some((re) => re.test(url));
 
-    while (queue.length && pages.length < options.maxPages) {
+    while (queue.length && pages.length < maxPages) {
       const url = queue.shift()!;
       if (visited.has(url) || !allowed(url)) continue;
       visited.add(url);
-      if (pages.length) await sleep(options.delayMs);
+      if (!robotsAllow(url)) {
+        log(`  skipped (robots.txt): ${url}`);
+        continue;
+      }
+      if (pages.length) await sleep(delayMs);
 
-      log(`[${pages.length + 1}/${options.maxPages}] ${url}`);
+      log(`[${pages.length + 1}/${maxPages}] ${url}`);
       events.reset();
       const t0 = Date.now();
       let status: number | null = null;
@@ -173,6 +238,12 @@ export async function runScout(options: ScoutOptions, existingBrowser?: Browser)
       for (const raw of links) {
         if (!/^https?:/i.test(raw)) continue;
         const link = normalize(raw);
+        // PDFs are collected separately (and may live on a subdomain, e.g. a docs CDN).
+        if (looksLikePdfLink(link) && isFirstParty(link, origin) && !exclude.some((re) => re.test(link))) {
+          if (!pdfLinks.has(link)) pdfLinks.set(link, new Set());
+          pdfLinks.get(link)!.add(url);
+          continue;
+        }
         if (!link.startsWith(origin)) continue;
         if (!referrers.has(link)) referrers.set(link, new Set());
         referrers.get(link)!.add(url);
@@ -181,7 +252,9 @@ export async function runScout(options: ScoutOptions, existingBrowser?: Browser)
     }
 
     // Same-origin links found but not visited (page limit): check their status directly.
-    const unchecked = [...referrers.keys()].filter((l) => !statusByUrl.has(l) && allowed(l)).slice(0, 25);
+    // Skipped in public scans: requests beyond the sampled pages need permission.
+    const unchecked = isPublic ? []
+      : [...referrers.keys()].filter((l) => !statusByUrl.has(l) && allowed(l)).slice(0, 25);
     for (const link of unchecked) {
       const res = await context.request.get(link, { maxRedirects: 5, timeout: 15_000 }).catch(() => null);
       statusByUrl.set(link, res ? res.status() : null);
@@ -236,6 +309,51 @@ export async function runScout(options: ScoutOptions, existingBrowser?: Browser)
       })));
     }
 
+    // ── PDFs ────────────────────────────────────────────────────────────────
+    const pdfs: PdfResult[] = [];
+    const pdfCap = isPublic ? PUBLIC_MAX_PDF_HEADS : (options.maxPdfs ?? DEFAULT_MAX_PDFS);
+    let fetched = 0;
+    for (const [url, from] of pdfLinks) {
+      const result: PdfResult = { url, linkedFrom: [...from], analyzed: false };
+      pdfs.push(result);
+      if (!robotsAllow(url)) {
+        result.skippedReason = 'disallowed by robots.txt';
+        continue;
+      }
+      if (fetched >= pdfCap) {
+        result.skippedReason = isPublic ? 'public scan: not requested' : `over the --max-pdfs limit (${pdfCap})`;
+        continue;
+      }
+      fetched++;
+      await sleep(delayMs);
+      const head = await context.request.head(url, { timeout: 30_000, maxRedirects: 5 }).catch(() => null);
+      const type = head?.headers()['content-type'] ?? '';
+      const length = Number(head?.headers()['content-length']);
+      if (Number.isFinite(length) && length > 0) result.bytes = length;
+      // Links like /DocumentCenter/View/123 are only PDFs if the server says so.
+      if (head?.ok() && type && !/pdf/i.test(type) && !/\.pdf$/i.test(new URL(url).pathname)) {
+        pdfs.pop();
+        continue;
+      }
+      if (isPublic) {
+        result.skippedReason = 'public scan: size checked only, not downloaded';
+        continue;
+      }
+      if (result.bytes && result.bytes > MAX_PDF_BYTES) {
+        result.skippedReason = `larger than ${MAX_PDF_BYTES / 1024 / 1024} MB`;
+        continue;
+      }
+      log(`  PDF ${fetched}/${Math.min(pdfCap, pdfLinks.size)}: ${url}`);
+      const res = await context.request.get(url, { timeout: 60_000, maxRedirects: 5 }).catch((e: Error) => e);
+      if (res instanceof Error || !res.ok()) {
+        result.error = res instanceof Error ? res.message.split('\n')[0] : `HTTP ${res.status()}`;
+        continue;
+      }
+      const analysis = await analyzePdf(url, await res.body());
+      Object.assign(result, analysis, { url, linkedFrom: [...from] });
+    }
+    siteFindings.push(...pdfFindings(pdfs));
+
     return {
       target: profile.startUrl,
       profile: profile.name,
@@ -244,6 +362,9 @@ export async function runScout(options: ScoutOptions, existingBrowser?: Browser)
       loginMs,
       pages,
       findings: dedupe([...siteFindings, ...pages.flatMap((p) => p.findings)]),
+      mode,
+      pdfs,
+      robots: robots ? { checked: true, skipped: robotsSkipped } : undefined,
     };
   } finally {
     await context.close();

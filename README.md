@@ -1,6 +1,6 @@
 # playwright-reliability-framework
 
-> A Playwright + TypeScript automation framework built for reliability, maintainability, and CI stability. 108 tests across auth, cart, checkout, product, sorting, and navigation flows, a bug-detection matrix that proves the checks catch real defects, and LaunchGuard Scout, an automated QA scanner for any site. Gated by lint and typecheck in CI.
+> A Playwright + TypeScript automation framework built for reliability, maintainability, and CI stability. 139 tests across auth, cart, checkout, product, sorting, and navigation flows, a bug-detection matrix that proves the checks catch real defects, and LaunchGuard Scout, an automated QA scanner for any site. Gated by lint and typecheck in CI.
 
 [![Playwright Tests](https://github.com/launchguardqa-dev/playwright-reliability-framework/actions/workflows/playwright.yml/badge.svg)](https://github.com/launchguardqa-dev/playwright-reliability-framework/actions/workflows/playwright.yml)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue)
@@ -123,6 +123,7 @@ Scout scans a website and produces an evidence-backed QA report. It has two laye
    | Accessibility | WCAG 2.1 AA violations via axe-core |
    | Mobile | Pages that scroll sideways at phone width (with a screenshot) |
    | Performance | Slow page loads and slow logins |
+   | PDFs | Untagged documents, missing title or language, scanned pages with no text layer, page counts |
 
 2. **An AI layer:** the `/qa-run` Claude Code skill (`.claude/skills/qa-run/`) runs the scanner, verifies heuristic findings against screenshots, merges findings that share a root cause, and writes a plain-language `qa-summary.md` ranked by user impact.
 
@@ -139,7 +140,38 @@ npm run scout -- https://the-internet.herokuapp.com/ --authorized --watch
 
 Output goes to `scout-reports/<host>-<timestamp>/`: `report.html` (light/dark, mobile-friendly), `findings.json`, and screenshots. Add `--fail-on high` to use it as a CI gate.
 
-**Safety rules, enforced in code:** it refuses to run without `--authorized`; it stays on the target's origin; it's read-only (it never clicks or submits anything except login steps you configure); and it's polite (15-page limit, 750ms between loads).
+**Safety rules, enforced in code:** it refuses to run without a scan mode; it stays on the target's origin; it's read-only (it never clicks or submits anything except login steps you configure); and it's polite (15-page limit, 750ms between loads).
+
+### Two scan modes: permission decides
+
+| | `--authorized` | `--public-scan` |
+|---|---|---|
+| Meaning | You own the site or have explicit permission | You don't: a preview of what any visitor sees |
+| Pages | Up to `--max-pages` (default 15) | **3 at most** |
+| Spacing | 750ms (configurable) | **5s at least**, or the site's `Crawl-delay` if longer |
+| robots.txt | Not required (you have permission) | **Obeyed**; refuses to start if the start page is disallowed |
+| Identification | Optional `--contact` | **Required**: `User-Agent: ...LaunchGuardScout/1.0...contact: <email>` plus a `From` header |
+| Logins | Profile login steps allowed | **Refused** |
+| PDFs | Downloaded and analyzed (up to `--max-pdfs`, 25 MB cap) | **Never downloaded**: counted, and up to 5 sized with HEAD requests |
+| Link checking | Unvisited links checked for errors | **Off**: no requests beyond the sampled pages |
+
+The two flags are mutually exclusive, and the public limits are enforced in the crawler itself (not just the CLI), so no caller can loosen them. `tests/scout/scout-public.spec.ts` checks each limit **at the server**, against what Scout actually sent. Each limit was also deliberately disabled once to confirm a test fails.
+
+### Government accessibility reports (ADA Title II)
+
+```bash
+npm run scout -- https://agency.example.gov --authorized --report gov
+npm run scout -- https://agency.example.gov --public-scan --contact you@example.com --report gov
+```
+
+`--report gov` writes a report for a non-technical reader at a city or district:
+- **A plain-English summary** of what was checked and the most important problems.
+- **What the DOJ Title II rule requires**, with compliance dates and sources. The dates are in one config value (`TITLE_II` in `scout/report-gov.ts`), verified against ada.gov because they've already been extended once.
+- **A PDF remediation estimate:** documents analyzed, total pages, untagged, scanned, missing title or language, plus a per-document table.
+- **Findings grouped by WCAG success criterion** (e.g. *1.1.1 Non-text Content*), mapped from axe's own rule tags.
+- **A manual testing checklist** for what automation can't verify: keyboard use, focus order and visibility, skip links, NVDA screen reader checks, forms and errors, zoom and reflow, captions, motion, color, and PDF reading order. A tester marks each item pass, fail, or not applicable, adds notes, and downloads the results as CSV.
+
+A public-scan report is labeled as a limited preview throughout.
 
 **Every finding carries a confidence level:** *confirmed* (directly observed), *likely* (strong signal, like an axe violation), or *heuristic* (a pattern worth a human look). Heuristics are labeled as such, never presented as fact.
 
@@ -255,7 +287,7 @@ playwright-reliability-framework/
 │   ├── product/product.spec.ts   # Product detail page (6)
 │   ├── sorting/sorting.spec.ts   # Sort order data integrity (6)
 │   ├── users/user-variants.spec.ts # 8 checks × 5 users: proves checks catch bugs (40)
-│   ├── scout/                    # Scout's own tests against a planted-bug fixture site + unit tests (26)
+│   ├── scout/                    # Scout's own tests against a planted-bug fixture site, public-scan limits, unit tests (57)
 │   └── smoke/                    # @smoke tag docs
 ├── scout/                        # LaunchGuard Scout scanner (crawl, checks, report, CLI, profiles)
 ├── .claude/skills/qa-run/        # /qa-run Claude Code skill: AI triage on top of Scout

@@ -200,6 +200,20 @@ export async function checkImages(page: Page, url: string): Promise<Finding[]> {
   return out;
 }
 
+/**
+ * axe tags each rule with the WCAG success criteria it tests, as "wcag" + digits:
+ * wcag111 → 1.1.1, wcag143 → 1.4.3, wcag1410 → 1.4.10. Level tags (wcag2a,
+ * wcag21aa) don't match because they contain letters.
+ */
+export function wcagFromTags(tags: string[]): string[] {
+  const out: string[] = [];
+  for (const tag of tags) {
+    const m = /^wcag(\d)(\d)(\d{1,2})$/.exec(tag);
+    if (m) out.push(`${m[1]}.${m[2]}.${m[3]}`);
+  }
+  return [...new Set(out)];
+}
+
 export async function checkAccessibility(page: Page, url: string): Promise<Finding[]> {
   const results = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa']).analyze();
   return results.violations.map((v) => finding({
@@ -213,6 +227,7 @@ export async function checkAccessibility(page: Page, url: string): Promise<Findi
     detail: `${v.description} (impact: ${v.impact ?? 'unknown'})`,
     samples: v.nodes.slice(0, 5).map((n) => n.target.join(' ')),
     helpUrl: v.helpUrl,
+    wcag: wcagFromTags(v.tags),
   }, url));
 }
 
@@ -245,7 +260,7 @@ export async function checkMobile(
     const shot = screenshotPath();
     await page.screenshot({ path: shot.absolute, fullPage: false });
     out.push(finding({
-      rule: 'mobile-overflow', title: 'Page scrolls sideways on a phone',
+      rule: 'mobile-overflow', title: 'Page scrolls sideways on a phone', wcag: ['1.4.10'],
       severity: 'medium', confidence: 'confirmed', category: 'mobile',
       detail: `At ${MOBILE_VIEWPORT.width}px wide the page is ${scrollWidth}px wide, so users must scroll horizontally.`,
       samples: widest ? [widest] : undefined,

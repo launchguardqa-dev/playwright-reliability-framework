@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { runScout } from './crawl';
 import { renderHtml } from './report';
+import { renderGovHtml } from './report-gov';
 import { Profile, Severity } from './types';
 
 /**
@@ -10,8 +11,18 @@ import { Profile, Severity } from './types';
  *   npm run scout -- <url> --authorized
  *   npm run scout -- --profile scout/profiles/saucedemo.json --authorized --username problem_user
  *
+ *   npm run scout -- https://agency.gov --public-scan --contact you@example.com --report gov
+ *
+ * Scan mode (exactly one is required):
+ *   --authorized         You have permission to test the site: full crawl, PDFs downloaded and analyzed.
+ *   --public-scan        You do NOT have permission: a strictly limited, identified preview of public pages
+ *                        (3 pages max, 5s+ between requests, robots.txt obeyed, no logins, PDFs counted not
+ *                        downloaded). Requires --contact.
+ *
  * Options:
- *   --authorized         Required. Confirms you have permission to test the target site.
+ *   --contact <email>    Sent in the User-Agent and From header so site owners can reach you.
+ *   --report gov         Government accessibility report (ADA Title II, WCAG 2.1 AA) instead of the standard one.
+ *   --max-pdfs <n>       PDFs to download and analyze in an authorized scan (default 20).
  *   --profile <file>     JSON profile (start URL, extra paths, excludes, optional login steps).
  *   --max-pages <n>      Page limit (default 15).
  *   --delay <ms>         Politeness delay between page loads (default 750).
@@ -53,10 +64,22 @@ function fail(message: string): never {
 async function main() {
   const { args, positional } = parseArgs(process.argv.slice(2));
 
-  if (!args.authorized) {
-    fail('refusing to scan without --authorized.\n'
-      + 'Only scan sites you own or have explicit permission to test. Add --authorized to confirm.');
+  if (args.authorized && args['public-scan']) {
+    fail('choose one: --authorized (you have permission) or --public-scan (you do not).');
   }
+  if (!args.authorized && !args['public-scan']) {
+    fail('refusing to scan without a mode.\n'
+      + '  --authorized   you own the site or have explicit permission to test it (full scan)\n'
+      + '  --public-scan  you do not: a limited, identified preview of 3 public pages (needs --contact)');
+  }
+  const mode = args['public-scan'] ? 'public' as const : 'authorized' as const;
+  const contact = typeof args.contact === 'string' ? args.contact : undefined;
+  if (contact && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contact)) fail(`--contact must be an email address, got "${contact}".`);
+  if (mode === 'public' && !contact) {
+    fail('--public-scan requires --contact <email>, so the site owner can identify and reach you.');
+  }
+  const reportKind = args.report === undefined ? 'standard' : args.report;
+  if (reportKind !== 'standard' && reportKind !== 'gov') fail('--report must be "gov" (or omitted for the standard report).');
 
   let profile: Profile;
   if (typeof args.profile === 'string') {
@@ -81,7 +104,11 @@ async function main() {
     ? args.out
     : path.join('scout-reports', `${new URL(profile.startUrl).hostname}-${stamp}`);
 
-  console.log(`\nLaunchGuard Scout → ${profile.startUrl} (profile: ${profile.name})\n`);
+  console.log(`\nLaunchGuard Scout → ${profile.startUrl} (profile: ${profile.name}, mode: ${mode})`);
+  if (mode === 'public') {
+    console.log('  Public scan: up to 3 pages, 5s+ between requests, robots.txt obeyed, PDFs counted not downloaded.');
+  }
+  console.log('');
   const result = await runScout({
     profile,
     maxPages: Number(args['max-pages'] ?? 15),
@@ -90,11 +117,14 @@ async function main() {
     username: typeof args.username === 'string' ? args.username : undefined,
     password: typeof args.password === 'string' ? args.password : undefined,
     watch: args.watch ? { slowMo: Number(args['slow-mo'] ?? 300) } : undefined,
+    mode,
+    contact,
+    maxPdfs: args['max-pdfs'] !== undefined ? Number(args['max-pdfs']) : undefined,
     log: (m) => console.log(`  ${m}`),
   });
 
   fs.writeFileSync(path.join(outDir, 'findings.json'), JSON.stringify(result, null, 2));
-  fs.writeFileSync(path.join(outDir, 'report.html'), renderHtml(result));
+  fs.writeFileSync(path.join(outDir, 'report.html'), reportKind === 'gov' ? renderGovHtml(result) : renderHtml(result));
 
   const counts = SEVERITIES.map((s) => `${result.findings.filter((f) => f.severity === s).length} ${s}`).join(' · ');
   console.log(`\nScanned ${result.pages.length} page(s) in ${(result.durationMs / 1000).toFixed(0)}s`);

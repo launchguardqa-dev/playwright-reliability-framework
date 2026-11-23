@@ -19,7 +19,14 @@ Scanning a site you don't have permission to test can violate its terms or the l
 - Public practice sites built for testing (saucedemo.com, the-internet.herokuapp.com,
   example.com) are fine to scan.
 - For any other site, ask the user to confirm they own it or have explicit permission
-  **before running anything**. If they can't confirm, stop.
+  **before running anything**.
+- If they don't have permission, the only option is `--public-scan`: a 3-page, identified,
+  robots.txt-respecting preview that never downloads documents. It needs a contact email
+  from the user (`--contact`); never invent one or reuse one from elsewhere. Never pass
+  `--authorized` for a site the user hasn't confirmed permission for: that flag is a
+  statement of permission.
+- Share public-scan findings only privately with the site owner, framed as an offer.
+  Never mention lawsuits, demand letters or enforcement.
 
 ## 2. Run the scanner
 
@@ -30,6 +37,17 @@ npm run scout -- --profile scout/profiles/<name>.json --authorized --username <u
 ```
 
 Defaults are polite (15 pages, 750ms between loads). Don't raise them without the user asking.
+
+```bash
+# No permission: limited public preview
+npm run scout -- <url> --public-scan --contact <user's email> --out scout-reports/<short-name>
+# Government agency (ADA Title II): add --report gov to either mode
+npm run scout -- <url> --authorized --report gov --out scout-reports/<short-name>
+```
+
+For government reports, read the PDF table and remediation numbers in `findings.json`
+(`pdfs`) and include them in the summary. Remind the user that the Title II dates in
+`scout/report-gov.ts` should be checked against ada.gov before a report goes to a client.
 
 ## 3. Verify before you report
 
