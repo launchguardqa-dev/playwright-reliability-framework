@@ -101,7 +101,10 @@ const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? o
 function executiveSummary(result: ScoutResult): string {
   const host = new URL(result.target).hostname;
   const date = new Date(result.startedAt).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
-  const accessibility = result.findings.filter((f) => f.wcag?.length);
+  // The site's own problems only: embedded third-party content is summarized separately.
+  const accessibility = result.findings.filter((f) => f.wcag?.length && !f.thirdParty);
+  const embedded = result.findings.filter((f) => f.wcag?.length && f.thirdParty);
+  const embedHosts = [...new Set(embedded.map((f) => f.thirdParty!))];
   const affectedPages = new Set(accessibility.flatMap((f) => f.pages).filter((p) => !/\.pdf/i.test(p)));
   const pdf = pdfSummary(result.pdfs);
   const top = accessibility
@@ -127,6 +130,7 @@ function executiveSummary(result: ScoutResult): string {
     <p>Automated testing found <strong>${plural(accessibility.length, 'type')} of accessibility problem</strong> on ${plural(affectedPages.size, 'page')}, measured against ${TITLE_II.standard}, the standard the ADA Title II rule requires.${top ? ' The most important:' : ''}</p>
     ${top ? `<ul>${top}</ul>` : ''}
     ${pdfLine}
+    ${embedded.length ? `<p>Separately, <strong>${plural(embedded.length, 'issue')}</strong> ${embedded.length === 1 ? 'was' : 'were'} found inside embedded content from ${embedHosts.map(esc).join(', ')} (see <a href="#embedded">Embedded third-party content</a>). The agency is still responsible for what it embeds, but the fixes are different.</p>` : ''}
     <p>Automated tools can only detect some kinds of accessibility problems. The <a href="#manual">manual checklist</a> below covers what a person has to verify, such as keyboard use and screen reader experience. Passing an automated scan does not by itself mean a site complies.</p>
   </section>`;
 }
@@ -197,8 +201,9 @@ function pdfSection(result: ScoutResult): string {
 }
 
 function findingsByCriterion(result: ScoutResult, origin: string): string {
-  const withWcag = result.findings.filter((f) => f.wcag?.length);
-  const other = result.findings.filter((f) => !f.wcag?.length);
+  // Third-party findings live in the embedded-content section instead.
+  const withWcag = result.findings.filter((f) => f.wcag?.length && !f.thirdParty);
+  const other = result.findings.filter((f) => !f.wcag?.length && !f.thirdParty);
   const groups = new Map<string, Finding[]>();
   for (const f of withWcag) {
     const sc = [...f.wcag!].sort(compareSc)[0];
@@ -212,6 +217,37 @@ function findingsByCriterion(result: ScoutResult, origin: string): string {
     <h2>Automated findings by WCAG success criterion</h2>
     ${withWcag.length ? sections : '<p class="empty">No WCAG issues were detected automatically on the scanned pages.</p>'}
     ${other.length ? `<h2>Other technical findings</h2><p class="meta">Not WCAG failures in themselves, but problems a visitor may hit.</p>${other.map((f) => findingCard(f, origin)).join('')}` : ''}
+  </section>`;
+}
+
+/** Typical remediation for common embed providers; anything else gets the general advice. */
+const EMBED_ADVICE: [RegExp, string][] = [
+  [/youtube|youtu\.be|vimeo|granicus|swagit/i,
+    'Video players: give each embedded player an <code>&lt;iframe title&gt;</code> (e.g. “City Council meeting, March 4”), make sure accurate captions (not just auto-captions) are on, and link to the video page or a transcript next to the player.'],
+  [/google|maps|arcgis|mapbox/i,
+    'Maps: give the map iframe a title, and put the address, directions or the information the map shows in text on the page.'],
+  [/facebook|twitter|x\.com|instagram|linkedin|nextdoor/i,
+    'Social feeds: title the widget, and make sure the same announcements are also published as regular text on the site.'],
+];
+
+function embeddedSection(result: ScoutResult, origin: string): string {
+  const embedded = result.findings.filter((f) => f.thirdParty && f.wcag?.length);
+  const noise = result.findings.filter((f) => f.thirdParty && !f.wcag?.length);
+  if (!embedded.length && !noise.length) return '';
+  const hosts = [...new Set([...embedded, ...noise].map((f) => f.thirdParty!))];
+  const advice = EMBED_ADVICE.filter(([re]) => hosts.some((h) => re.test(h))).map(([, a]) => `<li>${a}</li>`).join('');
+  return `
+  <section id="embedded">
+    <h2>Embedded third-party content</h2>
+    <p>These problems are inside content the site embeds from other services (${hosts.map(esc).join(', ')}), not in the site’s own pages. <strong>The agency is still responsible for them:</strong> under the Title II rule, content a government provides through its website, including embedded players, maps and widgets, is generally covered. The rule’s exceptions are narrow, so confirm specifics with counsel. The difference is how they get fixed: usually through embed settings, an accessible alternative, or a different provider, rather than the site’s own code.</p>
+    <h3>Typical fixes</h3>
+    <ul>
+      ${advice}
+      <li>Offer an accessible alternative next to any embed: a link to the original, a transcript, or the same information as text.</li>
+      <li>Ask the vendor for their accessibility conformance report (VPAT) and prefer accessible options when renewing contracts.</li>
+    </ul>
+    ${embedded.map((f) => findingCard(f, origin)).join('')}
+    ${noise.length ? `<details><summary>${plural(noise.length, 'error')} from third-party scripts (usually not visible to visitors)</summary>${noise.map((f) => findingCard(f, origin)).join('')}</details>` : ''}
   </section>`;
 }
 
@@ -310,6 +346,7 @@ ${STYLES}
   ${titleIINote()}
   ${pdfSection(result)}
   ${findingsByCriterion(result, origin)}
+  ${embeddedSection(result, origin)}
   ${manualChecklist(result)}
   <h2>Pages scanned</h2>
   <div class="table-wrap"><table>

@@ -1,6 +1,6 @@
 # playwright-reliability-framework
 
-> A Playwright + TypeScript automation framework built for reliability, maintainability, and CI stability. 139 tests across auth, cart, checkout, product, sorting, and navigation flows, a bug-detection matrix that proves the checks catch real defects, and LaunchGuard Scout, an automated QA scanner for any site. Gated by lint and typecheck in CI.
+> A Playwright + TypeScript automation framework built for reliability, maintainability, and CI stability. 154 tests across auth, cart, checkout, product, sorting, and navigation flows, a bug-detection matrix that proves the checks catch real defects, and LaunchGuard Scout, an automated QA scanner for any site. Gated by lint and typecheck in CI.
 
 [![Playwright Tests](https://github.com/launchguardqa-dev/playwright-reliability-framework/actions/workflows/playwright.yml/badge.svg)](https://github.com/launchguardqa-dev/playwright-reliability-framework/actions/workflows/playwright.yml)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue)
@@ -150,7 +150,7 @@ Output goes to `scout-reports/<host>-<timestamp>/`: `report.html` (light/dark, m
 | Pages | Up to `--max-pages` (default 15) | **3 at most** |
 | Spacing | 750ms (configurable) | **5s at least**, or the site's `Crawl-delay` if longer |
 | robots.txt | Not required (you have permission) | **Obeyed**; refuses to start if the start page is disallowed |
-| Identification | Optional `--contact` | **Required**: `User-Agent: ...LaunchGuardScout/1.0...contact: <email>` plus a `From` header |
+| Identification | Optional `--contact` | **Required**: the scanned site gets `User-Agent: ...LaunchGuardScout/1.0...contact: <email>` plus a `From` header; third parties see only the tool name, never the email |
 | Logins | Profile login steps allowed | **Refused** |
 | PDFs | Downloaded and analyzed (up to `--max-pdfs`, 25 MB cap) | **Never downloaded**: counted, and up to 5 sized with HEAD requests |
 | Link checking | Unvisited links checked for errors | **Off**: no requests beyond the sampled pages |
@@ -198,6 +198,14 @@ Each new site Scout scans is a test of Scout itself. Every false positive below 
 - **A signed-out session check rated as a failure.** Once the API was correctly first-party, its expected 401 ("who's signed in?") showed up as a medium "failed request". Background 401/403 responses are now *info*, matching how 401 pages are reported.
 
 Real issues it found there, verified on the live site: a JavaScript crash on the Special Tools category (the "By category" filter renders empty and no products show), a show-password button with no accessible name, and a language button whose visible text ("EN") doesn't match its accessible name.
+
+**A live government site** (Granicus GovAccess/OpenCities, first public scan): validated against a real city site, where the first run surfaced two crawler improvements.
+- **One homepage used the whole 3-page budget.** `/`, `/Home` and `/Home?oc_lang=en-US` are the same page. Scout now drops no-op query parameters (`oc_lang`, `utm_*`, `fbclid`, …) and records each scanned page's other names (its final URL after redirects and its `<link rel="canonical">`), so known duplicates are skipped **without a request**. Pages that turn out identical only after loading (same visible text) are dropped from the results. Links in `<nav>`/`<header>` are crawled first, so a 3-page preview covers the homepage plus top-level sections.
+- **An embedded YouTube player's problems were reported as the city's.** All four high-severity accessibility findings were inside the player. Scout now attributes findings to the third party when the affected element is inside (or is) a third-party iframe, and does the same for console errors and failed requests from third-party scripts. The government report lists them in their own section, noting that the agency is still responsible for what it embeds, with typical fixes (iframe titles, captions, an accessible alternative). They're kept out of the summary of the site's own issues.
+
+Both fixes are covered by a fixture "city site" (`tests/scout/city-site.ts`) modeled on that run. 7 of its 8 tests fail on the pre-fix code; the 8th guards against over-attribution, so it passes either way.
+
+**Re-validating those fixes live surfaced a third, caused by Scout itself.** Both fixes worked on the real site, but the scan showed Google Fonts and Google Maps requests "blocked by CORS policy". Scout was adding its `From` header to *every* request. `From` isn't a CORS-safelisted header, so each cross-origin font or API request triggered a preflight that the third party rejected: failures a real visitor would never see. It also sent the contact email to Google, YouTube and Akamai. Now the full identification (contact in the User-Agent, plus `From`) goes only to the scanned site's own origin. Third parties see a User-Agent with the tool name and no email, and Scout's direct requests (robots.txt, PDFs) carry the identification explicitly. Console errors that the page logs about someone else's resource ("Access to font at 'https://fonts.gstatic.com/…' … blocked by CORS policy") are attributed to that host. The fixture's third-party server rejects preflights the way real CDNs do and logs every header it receives. 4 of the 6 new tests fail on the code before this fix; the other 2 confirm the site still gets the identification and its own errors stay its own.
 
 ### What it found on SauceDemo
 
@@ -287,7 +295,7 @@ playwright-reliability-framework/
 │   ├── product/product.spec.ts   # Product detail page (6)
 │   ├── sorting/sorting.spec.ts   # Sort order data integrity (6)
 │   ├── users/user-variants.spec.ts # 8 checks × 5 users: proves checks catch bugs (40)
-│   ├── scout/                    # Scout's own tests against a planted-bug fixture site, public-scan limits, unit tests (57)
+│   ├── scout/                    # Scout's own tests against a planted-bug fixture site, a city site, public-scan limits, unit tests (72)
 │   └── smoke/                    # @smoke tag docs
 ├── scout/                        # LaunchGuard Scout scanner (crawl, checks, report, CLI, profiles)
 ├── .claude/skills/qa-run/        # /qa-run Claude Code skill: AI triage on top of Scout

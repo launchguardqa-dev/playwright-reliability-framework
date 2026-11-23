@@ -13,19 +13,27 @@ const VERY_SLOW_PAGE_MS = 6_000;
 
 // ── Event collection ─────────────────────────────────────────────────────────
 
+/** A message plus the URL of the script that produced it (when the browser reports one). */
+export interface SourcedMessage { text: string; source?: string }
+
 export interface PageEvents {
-  consoleErrors: string[];
-  pageErrors: string[];
+  consoleErrors: SourcedMessage[];
+  pageErrors: SourcedMessage[];
   failedRequests: { url: string; status: number | string; resourceType: string }[];
+}
+
+/** First script URL in a stack trace: where an uncaught error was thrown. */
+function stackSource(stack: string | undefined): string | undefined {
+  return /(https?:\/\/[^\s)'"]+?):\d+:\d+/.exec(stack ?? '')?.[1];
 }
 
 /** Attaches listeners once; call reset() before each page load. */
 export function collectEvents(page: Page): PageEvents & { reset: () => void } {
   const events: PageEvents = { consoleErrors: [], pageErrors: [], failedRequests: [] };
   page.on('console', (msg) => {
-    if (msg.type() === 'error') events.consoleErrors.push(msg.text());
+    if (msg.type() === 'error') events.consoleErrors.push({ text: msg.text(), source: msg.location().url || undefined });
   });
-  page.on('pageerror', (error) => events.pageErrors.push(error.message));
+  page.on('pageerror', (error) => events.pageErrors.push({ text: error.message, source: stackSource(error.stack) }));
   page.on('response', (response) => {
     if (response.status() >= 400) {
       events.failedRequests.push({ url: response.url(), status: response.status(), resourceType: response.request().resourceType() });
@@ -73,22 +81,61 @@ export function checkHttp(status: number | null, url: string): Finding[] {
   }, url)];
 }
 
-export function checkJavaScript(events: PageEvents, url: string): Finding[] {
+/** The third-party host a script or frame URL belongs to, or undefined if it's the site's own. */
+export function thirdPartyHost(source: string | undefined, origin: string): string | undefined {
+  if (!source || !/^https?:/i.test(source)) return undefined; // inline scripts report the page URL or nothing
+  return isFirstParty(source, origin) ? undefined : new URL(source).hostname;
+}
+
+/**
+ * The resource a browser error message is about, for messages logged by the page itself
+ * about someone else's resource (so the script URL points at the site, not the culprit):
+ *   Chromium: Access to font at 'https://fonts.gstatic.com/x.woff2' from origin '...' has been blocked by CORS policy
+ *   Firefox:  Cross-Origin Request Blocked: ... reading the remote resource at https://maps.googleapis.com/x. (Reason: ...)
+ *   Firefox:  [JavaScript Error: "downloadable font: rejected by sanitizer (...) source: https://fonts.gstatic.com/x.woff2"]
+ */
+export function resourceUrlInMessage(text: string): string | undefined {
+  const quoted = /^(?:Access to [\w ]+ at|[\w ]*(?:Failed|Unable) to load [\w ]*from|Refused to [\w ]+) '(https?:\/\/[^']+)'/i.exec(text);
+  if (quoted) return quoted[1];
+  const firefoxCors = /remote resource at (https?:\/\/\S+?)\.? \(Reason:/i.exec(text);
+  if (firefoxCors) return firefoxCors[1];
+  // Firefox reports resource problems (fonts, stylesheets, images) with the resource's URL as "source: <url>".
+  const firefoxSource = /\bsource: (https?:\/\/[^\s"\]]+)/i.exec(text);
+  return firefoxSource?.[1];
+}
+
+/**
+ * JavaScript errors, attributed to the site or to the third party whose script threw them
+ * (embedded players, maps, analytics). Third-party errors are low severity: usually not
+ * fixable by the site, though worth knowing about if something visible depends on them.
+ */
+export function checkJavaScript(events: PageEvents, url: string, origin = url): Finding[] {
   const out: Finding[] = [];
-  for (const message of unique(events.pageErrors)) {
-    out.push(finding({
-      rule: 'js-error', title: 'Uncaught JavaScript error', severity: 'high', confidence: 'confirmed',
-      category: 'javascript', detail: message,
-    }, url));
-  }
+  const seen = new Set<string>();
+  const add = (kind: 'js' | 'console', m: SourcedMessage) => {
+    // Who's responsible: the script that logged it, or (for errors the page logs ABOUT a
+    // resource, like a blocked font) the resource's own host.
+    const host = thirdPartyHost(m.source, origin) ?? thirdPartyHost(resourceUrlInMessage(m.text), origin);
+    const key = `${kind}|${host ?? ''}|${m.text}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    if (host) {
+      out.push(finding({
+        rule: kind === 'js' ? 'third-party-js-error' : 'third-party-console-error',
+        title: kind === 'js' ? `Uncaught error in a third-party script (${host})` : `Console error from a third-party script (${host})`,
+        severity: 'low', confidence: 'confirmed', category: 'javascript', detail: m.text,
+        samples: m.source ? [m.source] : undefined, thirdParty: host,
+      }, url));
+    } else {
+      out.push(finding(kind === 'js'
+        ? { rule: 'js-error', title: 'Uncaught JavaScript error', severity: 'high', confidence: 'confirmed', category: 'javascript', detail: m.text }
+        : { rule: 'console-error', title: 'Console error', severity: 'medium', confidence: 'confirmed', category: 'javascript', detail: m.text },
+      url));
+    }
+  };
+  for (const m of events.pageErrors) add('js', m);
   // Console errors that only echo a failed resource load are reported by checkNetwork instead.
-  const consoleOnly = unique(events.consoleErrors).filter((m) => !/^Failed to load resource/i.test(m));
-  for (const message of consoleOnly) {
-    out.push(finding({
-      rule: 'console-error', title: 'Console error', severity: 'medium', confidence: 'confirmed',
-      category: 'javascript', detail: message,
-    }, url));
-  }
+  for (const m of events.consoleErrors) if (!/^Failed to load resource/i.test(m.text)) add('console', m);
   return out;
 }
 
@@ -146,6 +193,7 @@ export function checkNetwork(events: PageEvents, url: string, origin: string): F
       confidence: 'confirmed', category: 'network',
       detail: `${req.resourceType} request returned ${req.status}: ${endpoint}`,
       samples: [req.url],
+      thirdParty: firstParty ? undefined : u.hostname,
     }, url));
   }
   return out;
@@ -214,21 +262,64 @@ export function wcagFromTags(tags: string[]): string[] {
   return [...new Set(out)];
 }
 
-export async function checkAccessibility(page: Page, url: string): Promise<Finding[]> {
+type AxeTarget = (string | string[])[];
+const FRAME_TAG = /^<(iframe|frame|embed|object)\b/i;
+
+/**
+ * Which third party (if any) an axe node belongs to. A node inside a frame has a
+ * multi-part target whose first part selects the frame; a node that IS a frame
+ * (e.g. an untitled YouTube iframe) has a single part and frame-tag HTML. Either
+ * way, the frame's src decides whether it's the site's own or a third party's.
+ */
+async function embedHostFor(
+  page: Page, origin: string, target: AxeTarget, html: string, cache: Map<string, string | undefined>,
+): Promise<string | undefined> {
+  const frameSelector = target.length > 1 || FRAME_TAG.test(html.trim()) ? target[0] : undefined;
+  if (typeof frameSelector !== 'string') return undefined; // top-level node, or inside shadow DOM
+  if (!cache.has(frameSelector)) {
+    const src = await page.locator(frameSelector).first()
+      .evaluate((el) => el.getAttribute('src') || el.getAttribute('data') || '', null, { timeout: 2_000 })
+      .catch(() => '');
+    let host: string | undefined;
+    try {
+      host = src ? thirdPartyHost(new URL(src, page.url()).toString(), origin) : undefined;
+    } catch {
+      host = undefined;
+    }
+    cache.set(frameSelector, host);
+  }
+  return cache.get(frameSelector);
+}
+
+export async function checkAccessibility(page: Page, url: string, origin = url): Promise<Finding[]> {
   const results = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa']).analyze();
-  return results.violations.map((v) => finding({
-    rule: `a11y:${v.id}`,
-    title: v.help,
-    severity: AXE_SEVERITY[v.impact ?? 'moderate'] ?? 'medium',
-    confidence: 'likely',
-    category: 'accessibility',
-    // No per-page element count in the detail: the same rule on two pages with different
-    // counts must merge into one finding. The affected elements are listed in `samples`.
-    detail: `${v.description} (impact: ${v.impact ?? 'unknown'})`,
-    samples: v.nodes.slice(0, 5).map((n) => n.target.join(' ')),
-    helpUrl: v.helpUrl,
-    wcag: wcagFromTags(v.tags),
-  }, url));
+  const cache = new Map<string, string | undefined>();
+  const out: Finding[] = [];
+  for (const v of results.violations) {
+    // Split each violation's elements into the site's own and each embed's.
+    const groups = new Map<string, typeof v.nodes>(); // '' = the site's own content
+    for (const node of v.nodes) {
+      const host = await embedHostFor(page, origin, node.target as AxeTarget, node.html ?? '', cache) ?? '';
+      groups.set(host, [...(groups.get(host) ?? []), node]);
+    }
+    for (const [host, nodes] of groups) {
+      out.push(finding({
+        rule: `a11y:${v.id}`,
+        title: host ? `${v.help} (in embedded content from ${host})` : v.help,
+        severity: AXE_SEVERITY[v.impact ?? 'moderate'] ?? 'medium',
+        confidence: 'likely',
+        category: 'accessibility',
+        // No per-page element count in the detail: the same rule on two pages with different
+        // counts must merge into one finding. The affected elements are listed in `samples`.
+        detail: `${v.description} (impact: ${v.impact ?? 'unknown'})`,
+        samples: nodes.slice(0, 5).map((n) => (n.target as AxeTarget).map((t) => (Array.isArray(t) ? t.join(' >>> ') : t)).join(' ⟶ ')),
+        helpUrl: v.helpUrl,
+        wcag: wcagFromTags(v.tags),
+        thirdParty: host || undefined,
+      }, url));
+    }
+  }
+  return out;
 }
 
 export async function checkMobile(
