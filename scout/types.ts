@@ -42,6 +42,13 @@ export interface Finding {
   helpUrl?: string;
   /** WCAG 2.x success criteria this finding relates to, e.g. ["1.1.1"]. */
   wcag?: string[];
+  /**
+   * Set when the problem comes from third-party content (an embedded YouTube player,
+   * a map, a social widget, an outside script): the host it belongs to. The site owner
+   * is still responsible for what it embeds, but these are reported separately from
+   * the site's own issues.
+   */
+  thirdParty?: string;
 }
 
 /** What Scout learned about one PDF document. */
@@ -139,4 +146,6 @@ export interface ScoutResult {
   pdfs: PdfResult[];
   /** robots.txt handling (public scans always check it). */
   robots?: { checked: boolean; skipped: string[] };
+  /** URLs skipped or dropped because they are the same page as one already scanned. */
+  duplicates?: { url: string; duplicateOf: string; reason: string }[];
 }

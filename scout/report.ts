@@ -78,6 +78,7 @@ export function findingCard(f: Finding, origin: string): string {
     : '';
   const help = f.helpUrl ? ` · <a href="${esc(f.helpUrl)}">How to fix</a>` : '';
   const wcag = f.wcag?.length ? ` · WCAG ${f.wcag.map(esc).join(', ')}` : '';
+  const source = f.thirdParty ? ` · third-party: ${esc(f.thirdParty)}` : '';
   return `
   <article class="card sev-${f.severity}">
     <header>
@@ -85,7 +86,7 @@ export function findingCard(f: Finding, origin: string): string {
       <h3>${esc(f.title)}</h3>
     </header>
     <p>${esc(f.detail)}</p>
-    <p class="meta"><span title="${esc(CONFIDENCE_LABEL[f.confidence])}">${f.confidence}</span> · ${f.category} · <code>${esc(f.rule)}</code>${wcag}${help}</p>
+    <p class="meta"><span title="${esc(CONFIDENCE_LABEL[f.confidence])}">${f.confidence}</span> · ${f.category} · <code>${esc(f.rule)}</code>${wcag}${source}${help}</p>
     <details><summary>Seen on ${f.pages.length} page${f.pages.length === 1 ? '' : 's'}</summary><ul>${pages}</ul></details>
     ${samples}
     ${shot}

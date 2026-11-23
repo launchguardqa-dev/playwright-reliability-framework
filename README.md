@@ -1,6 +1,6 @@
 # playwright-reliability-framework
 
-> A Playwright + TypeScript automation framework built for reliability, maintainability, and CI stability. 139 tests across auth, cart, checkout, product, sorting, and navigation flows, a bug-detection matrix that proves the checks catch real defects, and LaunchGuard Scout, an automated QA scanner for any site. Gated by lint and typecheck in CI.
+> A Playwright + TypeScript automation framework built for reliability, maintainability, and CI stability. 147 tests across auth, cart, checkout, product, sorting, and navigation flows, a bug-detection matrix that proves the checks catch real defects, and LaunchGuard Scout, an automated QA scanner for any site. Gated by lint and typecheck in CI.
 
 [![Playwright Tests](https://github.com/launchguardqa-dev/playwright-reliability-framework/actions/workflows/playwright.yml/badge.svg)](https://github.com/launchguardqa-dev/playwright-reliability-framework/actions/workflows/playwright.yml)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue)
@@ -199,6 +199,12 @@ Each new site Scout scans is a test of Scout itself. Every false positive below 
 
 Real issues it found there, verified on the live site: a JavaScript crash on the Special Tools category (the "By category" filter renders empty and no products show), a show-password button with no accessible name, and a language button whose visible text ("EN") doesn't match its accessible name.
 
+**A live government site** (Granicus GovAccess/OpenCities, first public scan): validated against a real city site, where the first run surfaced two crawler improvements.
+- **One homepage used the whole 3-page budget.** `/`, `/Home` and `/Home?oc_lang=en-US` are the same page. Scout now drops no-op query parameters (`oc_lang`, `utm_*`, `fbclid`, …) and records each scanned page's other names (its final URL after redirects and its `<link rel="canonical">`), so known duplicates are skipped **without a request**. Pages that turn out identical only after loading (same visible text) are dropped from the results. Links in `<nav>`/`<header>` are crawled first, so a 3-page preview covers the homepage plus top-level sections.
+- **An embedded YouTube player's problems were reported as the city's.** All four high-severity accessibility findings were inside the player. Scout now attributes findings to the third party when the affected element is inside (or is) a third-party iframe, and does the same for console errors and failed requests from third-party scripts. The government report lists them in their own section, noting that the agency is still responsible for what it embeds, with typical fixes (iframe titles, captions, an accessible alternative). They're kept out of the summary of the site's own issues.
+
+Both fixes are covered by a fixture "city site" (`tests/scout/city-site.ts`) modeled on that run. 7 of its 8 tests fail on the pre-fix code; the 8th guards against over-attribution, so it passes either way.
+
 ### What it found on SauceDemo
 
 | User | Scout's findings |
@@ -287,7 +293,7 @@ playwright-reliability-framework/
 │   ├── product/product.spec.ts   # Product detail page (6)
 │   ├── sorting/sorting.spec.ts   # Sort order data integrity (6)
 │   ├── users/user-variants.spec.ts # 8 checks × 5 users: proves checks catch bugs (40)
-│   ├── scout/                    # Scout's own tests against a planted-bug fixture site, public-scan limits, unit tests (57)
+│   ├── scout/                    # Scout's own tests against a planted-bug fixture site, a city site, public-scan limits, unit tests (65)
 │   └── smoke/                    # @smoke tag docs
 ├── scout/                        # LaunchGuard Scout scanner (crawl, checks, report, CLI, profiles)
 ├── .claude/skills/qa-run/        # /qa-run Claude Code skill: AI triage on top of Scout

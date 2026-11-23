@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { createHash } from 'crypto';
 import { Browser, chromium, Page } from '@playwright/test';
 import {
   collectEvents, checkHttp, checkJavaScript, checkNetwork, checkImages,
@@ -43,10 +44,29 @@ const MAX_SAMPLES = 10;
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-function normalize(url: string): string {
+/**
+ * Query parameters that never change what a page shows: tracking tags, and language
+ * switches like Granicus/OpenCities' oc_lang. Dropping them stops one page from being
+ * crawled several times under different URLs.
+ */
+const NO_OP_PARAMS = /^(utm_[a-z]+|oc_lang|fbclid|gclid|dclid|msclkid|mc_cid|mc_eid|_ga|_gl|igshid|ref_src)$/i;
+
+/** Canonical form of a URL for crawling: no fragment, no no-op query params. */
+export function normalizeUrl(url: string): string {
   const u = new URL(url);
   u.hash = '';
+  for (const key of [...u.searchParams.keys()]) {
+    if (NO_OP_PARAMS.test(key)) u.searchParams.delete(key);
+  }
   return u.toString();
+}
+const normalize = normalizeUrl;
+
+/** Identity of a page for duplicate detection: normalized, host lowercased, no trailing slash. */
+export function pageKey(url: string): string {
+  const u = new URL(normalizeUrl(url));
+  const path = u.pathname.length > 1 ? u.pathname.replace(/\/+$/, '') : '/';
+  return `${u.protocol}//${u.host.toLowerCase()}${path}${u.search}`;
 }
 
 async function login(page: Page, options: ScoutOptions): Promise<number> {
@@ -178,15 +198,34 @@ export async function runScout(options: ScoutOptions, existingBrowser?: Browser)
     const allowed = (url: string) =>
       url.startsWith(origin) && !SKIP_EXTENSIONS.test(url) && !exclude.some((re) => re.test(url));
 
-    while (queue.length && pages.length < maxPages) {
-      const url = queue.shift()!;
+    // Duplicate detection. Every scanned page registers all its names (requested URL,
+    // final URL after redirects, canonical link), so a later link to any of them is
+    // skipped WITHOUT a request. Pages that only turn out to be duplicates after loading
+    // (identical visible text) are dropped from the results.
+    const knownPages = new Map<string, string>(); // pageKey -> url of the scanned page it belongs to
+    const contentSeen = new Map<string, string>(); // text fingerprint -> scanned page url
+    const duplicates: { url: string; duplicateOf: string; reason: string }[] = [];
+    // Links inside <nav>/<header> are queued ahead of the rest, so a small budget
+    // (a 3-page public scan) covers the homepage plus top-level sections.
+    const navQueue: string[] = [];
+    let navigations = 0;
+
+    while ((navQueue.length || queue.length) && pages.length < maxPages && (!isPublic || navigations < maxPages)) {
+      const url = navQueue.length ? navQueue.shift()! : queue.shift()!;
       if (visited.has(url) || !allowed(url)) continue;
       visited.add(url);
+      const known = knownPages.get(pageKey(url));
+      if (known) {
+        duplicates.push({ url, duplicateOf: known, reason: 'same address as a scanned page (redirect, canonical or no-op parameter)' });
+        log(`  skipped (duplicate of ${known}): ${url}`);
+        continue;
+      }
       if (!robotsAllow(url)) {
         log(`  skipped (robots.txt): ${url}`);
         continue;
       }
-      if (pages.length) await sleep(delayMs);
+      if (navigations) await sleep(delayMs);
+      navigations++;
 
       log(`[${pages.length + 1}/${maxPages}] ${url}`);
       events.reset();
@@ -217,6 +256,25 @@ export async function runScout(options: ScoutOptions, existingBrowser?: Browser)
         if (rendered) renderedDespiteError.add(url);
       }
 
+      // Register this page's names, and drop it if it's a duplicate discovered only now.
+      const identity = await page.evaluate(() => ({
+        canonical: (document.querySelector('link[rel="canonical"]') as HTMLLinkElement | null)?.href ?? '',
+        text: (document.body?.innerText ?? '').replace(/\s+/g, ' ').trim(),
+      })).catch(() => ({ canonical: '', text: '' }));
+      const names = [url, page.url(), identity.canonical]
+        .filter((n) => /^https?:/i.test(n) && n.startsWith(origin))
+        .map(pageKey);
+      const sameAs = names.map((k) => knownPages.get(k)).find(Boolean)
+        ?? (identity.text.length >= 200 ? contentSeen.get(createHash('sha1').update(identity.text).digest('hex')) : undefined);
+      if (sameAs) {
+        duplicates.push({ url, duplicateOf: sameAs, reason: 'loaded the same page as one already scanned' });
+        log(`  duplicate of ${sameAs}: not counted`);
+        for (const k of names) if (!knownPages.has(k)) knownPages.set(k, sameAs);
+        continue;
+      }
+      for (const k of names) knownPages.set(k, url);
+      if (identity.text.length >= 200) contentSeen.set(createHash('sha1').update(identity.text).digest('hex'), url);
+
       const shot = nextShot();
       await page.screenshot({ path: shot.absolute, fullPage: true }).catch(() => {});
 
@@ -225,17 +283,20 @@ export async function runScout(options: ScoutOptions, existingBrowser?: Browser)
       // The status itself is reported once the crawl finishes.
       const errorPage = status === null || (status >= 400 && !renderedDespiteError.has(url));
       const findings: Finding[] = errorPage ? [] : [
-        ...checkJavaScript(events, url),
+        ...checkJavaScript(events, url, origin),
         ...checkNetwork(events, url, origin),
         ...await checkImages(page, url),
-        ...await checkAccessibility(page, url).catch((e) => { log(`  axe failed: ${(e as Error).message}`); return []; }),
+        ...await checkAccessibility(page, url, origin).catch((e) => { log(`  axe failed: ${(e as Error).message}`); return []; }),
         ...await checkMobile(page, url, nextShot),
         ...checkPerformance(loadMs, url),
       ];
       pages.push({ url, status, loadMs, title: await page.title(), screenshot: shot.relative, findings });
 
-      const links = await page.$$eval('a[href]', (as) => as.map((a) => (a as HTMLAnchorElement).href));
-      for (const raw of links) {
+      const links = await page.$$eval('a[href]', (as) => as.map((a) => ({
+        href: (a as HTMLAnchorElement).href,
+        inNav: !!a.closest('nav, header, [role="navigation"]'),
+      })));
+      for (const { href: raw, inNav } of links) {
         if (!/^https?:/i.test(raw)) continue;
         const link = normalize(raw);
         // PDFs are collected separately (and may live on a subdomain, e.g. a docs CDN).
@@ -247,7 +308,7 @@ export async function runScout(options: ScoutOptions, existingBrowser?: Browser)
         if (!link.startsWith(origin)) continue;
         if (!referrers.has(link)) referrers.set(link, new Set());
         referrers.get(link)!.add(url);
-        if (!visited.has(link) && allowed(link)) queue.push(link);
+        if (!visited.has(link) && allowed(link)) (inNav ? navQueue : queue).push(link);
       }
     }
 
@@ -365,6 +426,7 @@ export async function runScout(options: ScoutOptions, existingBrowser?: Browser)
       mode,
       pdfs,
       robots: robots ? { checked: true, skipped: robotsSkipped } : undefined,
+      duplicates,
     };
   } finally {
     await context.close();
