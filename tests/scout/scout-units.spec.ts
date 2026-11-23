@@ -1,7 +1,10 @@
 import { test, expect } from '@playwright/test';
-import { isFirstParty } from '../../scout/checks';
+import { isFirstParty, wcagFromTags } from '../../scout/checks';
 import { dedupe } from '../../scout/crawl';
+import { analyzePdf, looksLikePdfLink, pdfFindings, pdfSummary } from '../../scout/pdf';
+import { parseRobots, fetchRobots } from '../../scout/robots';
 import { Finding } from '../../scout/types';
+import { makePdf } from './pdf-fixtures';
 
 /**
  * Unit tests for Scout's classification and merging logic (no browser needed).
@@ -48,5 +51,106 @@ test.describe('Scout: merging findings', () => {
     expect(merged[0].pages).toHaveLength(15);
     expect(merged[0].samples).toHaveLength(10);
     expect(merged[0].samples!.filter((s) => s === '#shared')).toHaveLength(1);
+  });
+});
+
+test.describe('Scout: robots.txt', () => {
+  const robots = parseRobots([
+    'User-agent: *',
+    'Disallow: /admin/',
+    'Disallow: /search',
+    'Allow: /admin/public/',
+    'Disallow: /*.php$',
+    'Crawl-delay: 10',
+    '',
+    'User-agent: BadBot',
+    'Disallow: /',
+  ].join('\n'));
+  const at = (path: string) => robots.isAllowed(`https://city.gov${path}`);
+
+  test('allows paths with no matching rule', () => expect(at('/agendas/2026')).toBe(true));
+  test('disallows a matching prefix', () => expect(at('/admin/users')).toBe(false));
+  test('longest match wins: Allow inside a disallowed folder', () => expect(at('/admin/public/notice')).toBe(true));
+  test('prefix rules include query strings', () => expect(at('/search?q=water')).toBe(false));
+  test('$ anchors the end; * matches anything', () => {
+    expect(at('/forms/apply.php')).toBe(false);
+    expect(at('/forms/apply.php?x=1')).toBe(true);
+  });
+  test('uses the * group, not another bot\'s group', () => expect(robots.crawlDelaySeconds).toBe(10));
+
+  test('a group naming Scout takes priority over *', () => {
+    const r = parseRobots('User-agent: *\nDisallow:\n\nUser-agent: LaunchGuardScout\nDisallow: /\n');
+    expect(r.isAllowed('https://city.gov/')).toBe(false);
+  });
+  test('an empty Disallow allows everything', () => {
+    expect(parseRobots('User-agent: *\nDisallow:\n').isAllowed('https://city.gov/anything')).toBe(true);
+  });
+  /** A fake robots.txt fetcher: a status, or null for "no response". */
+  const respond = (status: number | null) => async () => (status === null ? null : { status, text: '' });
+
+  test('missing robots.txt (404) allows; server error (5xx) or no response disallows', async () => {
+    expect((await fetchRobots(respond(404), 'https://city.gov')).isAllowed('https://city.gov/')).toBe(true);
+    expect((await fetchRobots(respond(503), 'https://city.gov')).isAllowed('https://city.gov/')).toBe(false);
+    expect((await fetchRobots(respond(null), 'https://city.gov')).isAllowed('https://city.gov/')).toBe(false);
+  });
+});
+
+test.describe('Scout: WCAG mapping', () => {
+  test('maps axe tags to success criteria and ignores level tags', () => {
+    expect(wcagFromTags(['cat.text-alternatives', 'wcag2a', 'wcag111', 'section508'])).toEqual(['1.1.1']);
+    expect(wcagFromTags(['wcag2aa', 'wcag21aa', 'wcag143'])).toEqual(['1.4.3']);
+    expect(wcagFromTags(['wcag2a', 'wcag244', 'wcag412'])).toEqual(['2.4.4', '4.1.2']);
+    expect(wcagFromTags(['wcag21aa', 'wcag1410'])).toEqual(['1.4.10']);
+  });
+});
+
+test.describe('Scout: PDF detection and analysis', () => {
+  test('recognizes PDF links by extension and CivicPlus-style document URLs', () => {
+    expect(looksLikePdfLink('https://city.gov/files/Agenda%202026.PDF')).toBe(true);
+    expect(looksLikePdfLink('https://city.gov/DocumentCenter/View/123/Minutes')).toBe(true);
+    expect(looksLikePdfLink('https://city.gov/agenda.pdf.html')).toBe(false);
+    expect(looksLikePdfLink('https://city.gov/pdf-guide')).toBe(false);
+  });
+
+  test('reads tagging, title, language, text layer and page count', async () => {
+    const plain = await analyzePdf('https://c.gov/a.pdf', await makePdf({ pages: 3 }));
+    expect(plain).toMatchObject({ analyzed: true, pages: 3, tagged: false, textLayer: 'full', imageOnlyPages: 0 });
+    expect(plain.title).toBeUndefined();
+    expect(plain.lang).toBeUndefined();
+
+    const good = await analyzePdf('https://c.gov/b.pdf', await makePdf({ pages: 2, title: 'Agenda', lang: 'en-US', tagged: true }));
+    expect(good).toMatchObject({ analyzed: true, pages: 2, tagged: true, title: 'Agenda', lang: 'en-US', textLayer: 'full' });
+
+    const scanned = await analyzePdf('https://c.gov/c.pdf', await makePdf({ pages: 4, scanned: true }));
+    expect(scanned).toMatchObject({ textLayer: 'none', imageOnlyPages: 4 });
+
+    const partial = await analyzePdf('https://c.gov/d.pdf', await makePdf({ pages: 3, lastPageScanned: true }));
+    expect(partial).toMatchObject({ textLayer: 'partial', imageOnlyPages: 1 });
+  });
+
+  test('a corrupt file is reported, never thrown', async () => {
+    const bad = await analyzePdf('https://c.gov/x.pdf', new Uint8Array(Buffer.from('%PDF-1.7 not really a pdf')));
+    expect(bad.analyzed).toBe(false);
+    expect(bad.error).toMatch(/Could not read PDF/);
+    const html = await analyzePdf('https://c.gov/y.pdf', new Uint8Array(Buffer.from('<html>error</html>')));
+    expect(html.analyzed).toBe(false);
+  });
+
+  test('groups problems into one finding per type, with every affected PDF as evidence', async () => {
+    const pdfs = await Promise.all([
+      analyzePdf('https://c.gov/a.pdf', await makePdf({ pages: 3 })),
+      analyzePdf('https://c.gov/b.pdf', await makePdf({ pages: 1 })),
+      analyzePdf('https://c.gov/ok.pdf', await makePdf({ title: 'OK', lang: 'en', tagged: true })),
+    ]);
+    pdfs.forEach((p) => p.linkedFrom.push('https://c.gov/documents'));
+    const findings = pdfFindings(pdfs);
+    const untagged = findings.find((f) => f.rule === 'pdf-untagged')!;
+    expect(untagged.title).toBe('2 PDF(s) are not tagged');
+    expect(untagged.samples).toHaveLength(2);
+    expect(untagged.samples!.join()).not.toContain('ok.pdf');
+    expect(untagged.wcag).toEqual(['1.3.1', '1.3.2']);
+    expect(findings.map((f) => f.rule).sort()).toEqual(['pdf-no-language', 'pdf-no-title', 'pdf-untagged']);
+
+    expect(pdfSummary(pdfs)).toMatchObject({ analyzed: 3, totalPages: 5, untagged: 2, untaggedPages: 4, noTitle: 2, noLang: 2 });
   });
 });

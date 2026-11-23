@@ -1,5 +1,6 @@
 import * as http from 'http';
 import { AddressInfo } from 'net';
+import { makePdf } from './pdf-fixtures';
 
 /**
  * A tiny local website with exactly one planted bug per Scout check,
@@ -17,6 +18,9 @@ const page = (title: string, body: string, opts: { lang?: boolean } = {}) =>
 export const PAGES: Record<string, string> = {
   '/': page('Fixture home', `
     <ul>
+      <li><a href="/blocked/page.html">Disallowed by robots.txt</a></li>
+      <li><a href="/docs/agenda.pdf">Agenda (PDF)</a></li>
+      <li><a href="/documents.html">Documents</a></li>
       <li><a href="/clean.html">Clean page</a></li>
       <li><a href="/images.html">Images</a></li>
       <li><a href="/errors.html">Errors</a></li>
@@ -27,6 +31,19 @@ export const PAGES: Record<string, string> = {
       <li><a href="/private.html">Private page</a></li>
       <li><a href="/beacons.html">Beacons</a></li>
       <li><a href="/a11y-more.html">More accessibility</a></li>
+    </ul>`),
+
+  // robots.txt disallows /blocked/. Clean, so it adds no findings when an authorized scan visits it.
+  '/blocked/page.html': page('Blocked page', '<p>robots.txt asks crawlers not to visit this page.</p>'),
+
+  // One PDF per planted problem (see PDF_FILES), plus a duplicate link and an accessible control.
+  '/documents.html': page('Documents', `
+    <ul>
+      <li><a href="/docs/accessible.pdf">Accessible PDF (control)</a></li>
+      <li><a href="/docs/agenda.pdf">Agenda again (duplicate link)</a></li>
+      <li><a href="/docs/scanned.pdf">Scanned minutes</a></li>
+      <li><a href="/DocumentCenter/View/12">Budget (CMS link without .pdf)</a></li>
+      <li><a href="/docs/not-really.pdf">Broken PDF</a></li>
     </ul>`),
 
   // Same "missing label" rule as /a11y.html, but with a different number of elements.
@@ -74,11 +91,49 @@ export const PAGES: Record<string, string> = {
 
 export const SLOW_PATH = '/slow.html';
 export const SLOW_DELAY_MS = 3_300;
+export const DEFAULT_ROBOTS = 'User-agent: *\nDisallow: /blocked/\n';
 
-/** Starts the fixture site on a random free port. */
-export async function startFixtureSite(): Promise<{ origin: string; close: () => Promise<void> }> {
+export interface LoggedRequest { method: string; path: string; userAgent: string; from?: string; at: number }
+
+/** Starts the fixture site on a random free port. Every request is logged for assertions. */
+export async function startFixtureSite(opts: { robots?: string } = {}): Promise<{
+  origin: string;
+  requests: LoggedRequest[];
+  close: () => Promise<void>;
+}> {
+  // PDFs with known properties (see pdf-fixtures.ts).
+  const PDF_FILES: Record<string, Uint8Array> = {
+    '/docs/agenda.pdf': await makePdf({ pages: 3 }), // untagged, no title, no language
+    '/docs/accessible.pdf': await makePdf({ pages: 2, title: 'Budget Summary', lang: 'en-US', tagged: true }),
+    '/docs/scanned.pdf': await makePdf({ pages: 4, scanned: true }), // image-only, no text layer
+    '/DocumentCenter/View/12': await makePdf({ pages: 5, lastPageScanned: true, title: 'Annual Budget', lang: 'en' }),
+  };
+  const requests: LoggedRequest[] = [];
+
   const server = http.createServer((req, res) => {
     const path = (req.url ?? '/').split('?')[0];
+    requests.push({
+      method: req.method ?? 'GET', path, at: Date.now(),
+      userAgent: String(req.headers['user-agent'] ?? ''),
+      from: req.headers.from as string | undefined,
+    });
+    if (path === '/robots.txt') {
+      res.writeHead(200, { 'content-type': 'text/plain' });
+      res.end(opts.robots ?? DEFAULT_ROBOTS);
+      return;
+    }
+    const pdf = PDF_FILES[path];
+    if (pdf) {
+      res.writeHead(200, { 'content-type': 'application/pdf', 'content-length': pdf.byteLength });
+      res.end(req.method === 'HEAD' ? undefined : Buffer.from(pdf));
+      return;
+    }
+    if (path === '/docs/not-really.pdf') {
+      // A ".pdf" link that serves an HTML error page, as misconfigured CMSs do.
+      res.writeHead(200, { 'content-type': 'text/html' });
+      res.end(req.method === 'HEAD' ? undefined : '<html><body>Document temporarily unavailable</body></html>');
+      return;
+    }
     if (path === '/private.html') {
       // A sign-in wall: intended behavior, not a broken page.
       res.writeHead(401, { 'content-type': 'text/html', 'www-authenticate': 'Basic realm="fixture"' });
@@ -117,6 +172,7 @@ export async function startFixtureSite(): Promise<{ origin: string; close: () =>
   const { port } = server.address() as AddressInfo;
   return {
     origin: `http://127.0.0.1:${port}`,
+    requests,
     close: () => new Promise((resolve) => server.close(() => resolve())),
   };
 }

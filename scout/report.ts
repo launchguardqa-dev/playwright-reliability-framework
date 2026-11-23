@@ -2,71 +2,11 @@ import { Finding, ScoutResult, Severity } from './types';
 
 /** Renders a scan result as a single self-contained HTML page (screenshots are sibling files). */
 
-const esc = (s: string) =>
+export const esc = (s: string) =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
-const SEVERITIES: Severity[] = ['critical', 'high', 'medium', 'low', 'info'];
-
-const CONFIDENCE_LABEL = {
-  confirmed: 'Confirmed: directly observed',
-  likely: 'Likely: strong automated signal',
-  heuristic: 'Heuristic: worth a human look',
-};
-
-function pathOf(url: string, origin: string): string {
-  return url.startsWith(origin) ? url.slice(origin.length) || '/' : url;
-}
-
-function findingCard(f: Finding, origin: string): string {
-  const pages = f.pages.map((p) => `<li><a href="${esc(p)}">${esc(pathOf(p, origin))}</a></li>`).join('');
-  const samples = f.samples?.length
-    ? `<details><summary>Evidence (${f.samples.length})</summary><ul class="mono">${f.samples.map((s) => `<li>${esc(s)}</li>`).join('')}</ul></details>`
-    : '';
-  const shot = f.screenshot
-    ? `<a class="shot" href="${esc(f.screenshot)}"><img src="${esc(f.screenshot)}" alt="Screenshot for: ${esc(f.title)}" loading="lazy"></a>`
-    : '';
-  const help = f.helpUrl ? ` · <a href="${esc(f.helpUrl)}">How to fix</a>` : '';
-  return `
-  <article class="card sev-${f.severity}">
-    <header>
-      <span class="badge sev-${f.severity}">${f.severity}</span>
-      <h3>${esc(f.title)}</h3>
-    </header>
-    <p>${esc(f.detail)}</p>
-    <p class="meta"><span title="${esc(CONFIDENCE_LABEL[f.confidence])}">${f.confidence}</span> · ${f.category} · <code>${esc(f.rule)}</code>${help}</p>
-    <details><summary>Seen on ${f.pages.length} page${f.pages.length === 1 ? '' : 's'}</summary><ul>${pages}</ul></details>
-    ${samples}
-    ${shot}
-  </article>`;
-}
-
-export function renderHtml(result: ScoutResult): string {
-  const origin = new URL(result.target).origin;
-  const counts = Object.fromEntries(SEVERITIES.map((s) => [s, result.findings.filter((f) => f.severity === s).length]));
-  const stats = SEVERITIES.filter((s) => s !== 'info' || counts[s])
-    .map((s) => `<div class="stat sev-${s}"><strong>${counts[s]}</strong><span>${s}</span></div>`).join('');
-  const sections = SEVERITIES.filter((s) => counts[s]).map((s) => `
-    <section>
-      <h2>${s[0].toUpperCase() + s.slice(1)} <span class="count">${counts[s]}</span></h2>
-      ${result.findings.filter((f) => f.severity === s).map((f) => findingCard(f, origin)).join('')}
-    </section>`).join('');
-  const pageRows = result.pages.map((p) => `
-    <tr>
-      <td><a href="${esc(p.url)}">${esc(pathOf(p.url, origin))}</a></td>
-      <td>${p.status ?? 'n/a'}</td>
-      <td>${(p.loadMs / 1000).toFixed(1)}s</td>
-      <td>${p.findings.length}</td>
-      <td>${p.screenshot ? `<a href="${esc(p.screenshot)}">view</a>` : ''}</td>
-    </tr>`).join('');
-
-  return `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Scout Report</title>
-<style>
-  :root {
+/** Shared by the standard and government reports. */
+export const STYLES = `  :root {
     --bg: #f7f7f5; --surface: #ffffff; --text: #1c1c1a; --muted: #5f5e5a; --border: #e2e1dc;
     --critical: #a3122a; --high: #c2410c; --medium: #a16207; --low: #2563a8; --info: #5f5e5a;
   }
@@ -114,7 +54,71 @@ export function renderHtml(result: ScoutResult): string {
   th { color: var(--muted); font-weight: 600; }
   .empty { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 20px; }
   footer { color: var(--muted); font-size: 13px; margin-top: 40px; }
-</style>
+`;
+
+const SEVERITIES: Severity[] = ['critical', 'high', 'medium', 'low', 'info'];
+
+const CONFIDENCE_LABEL = {
+  confirmed: 'Confirmed: directly observed',
+  likely: 'Likely: strong automated signal',
+  heuristic: 'Heuristic: worth a human look',
+};
+
+export function pathOf(url: string, origin: string): string {
+  return url.startsWith(origin) ? url.slice(origin.length) || '/' : url;
+}
+
+export function findingCard(f: Finding, origin: string): string {
+  const pages = f.pages.map((p) => `<li><a href="${esc(p)}">${esc(pathOf(p, origin))}</a></li>`).join('');
+  const samples = f.samples?.length
+    ? `<details><summary>Evidence (${f.samples.length})</summary><ul class="mono">${f.samples.map((s) => `<li>${esc(s)}</li>`).join('')}</ul></details>`
+    : '';
+  const shot = f.screenshot
+    ? `<a class="shot" href="${esc(f.screenshot)}"><img src="${esc(f.screenshot)}" alt="Screenshot for: ${esc(f.title)}" loading="lazy"></a>`
+    : '';
+  const help = f.helpUrl ? ` · <a href="${esc(f.helpUrl)}">How to fix</a>` : '';
+  const wcag = f.wcag?.length ? ` · WCAG ${f.wcag.map(esc).join(', ')}` : '';
+  return `
+  <article class="card sev-${f.severity}">
+    <header>
+      <span class="badge sev-${f.severity}">${f.severity}</span>
+      <h3>${esc(f.title)}</h3>
+    </header>
+    <p>${esc(f.detail)}</p>
+    <p class="meta"><span title="${esc(CONFIDENCE_LABEL[f.confidence])}">${f.confidence}</span> · ${f.category} · <code>${esc(f.rule)}</code>${wcag}${help}</p>
+    <details><summary>Seen on ${f.pages.length} page${f.pages.length === 1 ? '' : 's'}</summary><ul>${pages}</ul></details>
+    ${samples}
+    ${shot}
+  </article>`;
+}
+
+export function renderHtml(result: ScoutResult): string {
+  const origin = new URL(result.target).origin;
+  const counts = Object.fromEntries(SEVERITIES.map((s) => [s, result.findings.filter((f) => f.severity === s).length]));
+  const stats = SEVERITIES.filter((s) => s !== 'info' || counts[s])
+    .map((s) => `<div class="stat sev-${s}"><strong>${counts[s]}</strong><span>${s}</span></div>`).join('');
+  const sections = SEVERITIES.filter((s) => counts[s]).map((s) => `
+    <section>
+      <h2>${s[0].toUpperCase() + s.slice(1)} <span class="count">${counts[s]}</span></h2>
+      ${result.findings.filter((f) => f.severity === s).map((f) => findingCard(f, origin)).join('')}
+    </section>`).join('');
+  const pageRows = result.pages.map((p) => `
+    <tr>
+      <td><a href="${esc(p.url)}">${esc(pathOf(p.url, origin))}</a></td>
+      <td>${p.status ?? 'n/a'}</td>
+      <td>${(p.loadMs / 1000).toFixed(1)}s</td>
+      <td>${p.findings.length}</td>
+      <td>${p.screenshot ? `<a href="${esc(p.screenshot)}">view</a>` : ''}</td>
+    </tr>`).join('');
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Scout Report</title>
+<style>
+${STYLES}</style>
 </head>
 <body>
 <main>

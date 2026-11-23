@@ -3,6 +3,7 @@ import * as path from 'path';
 import { test, expect } from '@playwright/test';
 import { runScout } from '../../scout/crawl';
 import { renderHtml } from '../../scout/report';
+import { renderGovHtml, MANUAL_CHECKS, TITLE_II } from '../../scout/report-gov';
 import { Finding, ScoutResult } from '../../scout/types';
 import { startFixtureSite } from './fixture-site';
 
@@ -114,6 +115,76 @@ test.describe('LaunchGuard Scout', () => {
     expect(on('/missing.html'), 'the 404 page itself').toEqual([]);
     expect(on('/private.html').map((f) => f.rule), 'the 401 page itself').toEqual(['auth-required']);
     expect(on('/gone.html').map((f) => f.rule), 'unlinked 404 seed').toEqual(['http-error']);
+  });
+
+  // ── PDFs (authorized scan) ─────────────────────────────────────────────────
+
+  const pdf = (p: string) => `${site.origin}${p}`;
+  const pdfSamples = (rule: string) => result.findings.find((f) => f.rule === rule)?.samples?.join('\n') ?? '';
+
+  test('finds every linked PDF once, including a CMS link without .pdf', () => {
+    expect(result.pdfs.map((p) => p.url).sort()).toEqual([
+      pdf('/DocumentCenter/View/12'), pdf('/docs/accessible.pdf'), pdf('/docs/agenda.pdf'),
+      pdf('/docs/not-really.pdf'), pdf('/docs/scanned.pdf'),
+    ]);
+    const agenda = result.pdfs.find((p) => p.url === pdf('/docs/agenda.pdf'))!;
+    expect(agenda.linkedFrom.sort(), 'linked from both pages, merged').toEqual([`${site.origin}/`, `${site.origin}/documents.html`]);
+  });
+
+  test('flags each planted PDF problem, and nothing on the accessible control PDF', () => {
+    expect(pdfSamples('pdf-untagged')).toContain('agenda.pdf');
+    expect(pdfSamples('pdf-untagged')).toContain('scanned.pdf');
+    expect(pdfSamples('pdf-no-title')).toContain('agenda.pdf');
+    expect(pdfSamples('pdf-no-language')).toContain('scanned.pdf');
+    expect(pdfSamples('pdf-scanned')).toContain('scanned.pdf');
+    expect(pdfSamples('pdf-partly-scanned')).toContain('DocumentCenter/View/12');
+    expect(pdfSamples('pdf-unreadable')).toContain('not-really.pdf');
+    const everyPdfSample = result.findings.filter((f) => f.category === 'pdf').flatMap((f) => f.samples ?? []).join('\n');
+    expect(everyPdfSample, 'accessible.pdf is the control').not.toContain('accessible.pdf');
+  });
+
+  test('records page counts for the remediation estimate', () => {
+    const pages = Object.fromEntries(result.pdfs.map((p) => [new URL(p.url).pathname, p.pages]));
+    expect(pages).toMatchObject({ '/docs/agenda.pdf': 3, '/docs/accessible.pdf': 2, '/docs/scanned.pdf': 4, '/DocumentCenter/View/12': 5 });
+  });
+
+  test('tags accessibility findings with their WCAG success criteria', () => {
+    expect(result.findings.find((f) => f.rule === 'a11y:image-alt')?.wcag).toContain('1.1.1');
+    expect(result.findings.find((f) => f.rule === 'a11y:html-has-lang')?.wcag).toContain('3.1.1');
+    expect(result.findings.find((f) => f.rule === 'mobile-overflow')?.wcag).toEqual(['1.4.10']);
+  });
+
+  // ── Government report ──────────────────────────────────────────────────────
+
+  test('government report: summary, Title II dates, WCAG grouping, PDF estimate, checklist', () => {
+    const html = renderGovHtml(result);
+    expect(html).toContain('<h2>Summary</h2>');
+    for (const d of TITLE_II.deadlines) expect(html).toContain(d.date);
+    expect(html).toContain(TITLE_II.sources[0].url);
+    expect(html).toContain('WCAG 1.1.1 Non-text Content');
+    expect(html).toContain('WCAG 1.4.10 Reflow');
+    expect(html).toMatch(/<strong>4<\/strong><span>PDFs analyzed<\/span>/);
+    expect(html).toMatch(/<strong>14<\/strong><span>total pages<\/span>/);
+    expect(html.match(/<fieldset class="check"/g)).toHaveLength(MANUAL_CHECKS.length);
+    expect(html, 'no unfilled values').not.toMatch(/undefined|NaN/);
+    expect(html).not.toContain('<script>console.error'); // page content is escaped
+  });
+
+  test('government report: checklist choices download as CSV', async ({ page }) => {
+    const file = path.join(outDir, 'report-gov.html');
+    fs.writeFileSync(file, renderGovHtml(result));
+    await page.goto(`file:///${file.replace(/\\/g, '/')}`);
+    await page.locator('input[name="check-keyboard"][value="fail"]').check();
+    await page.locator('textarea[name="notes-keyboard"]').fill('Menu "Services" can\'t be opened by keyboard');
+    await page.locator('input[name="check-media"][value="n/a"]').check();
+    await expect(page.locator('#progress')).toHaveText(`2 of ${MANUAL_CHECKS.length} checked`);
+
+    const [download] = await Promise.all([page.waitForEvent('download'), page.locator('#download').click()]);
+    const csv = fs.readFileSync(await download.path(), 'utf8');
+    expect(csv.split('\r\n')).toHaveLength(MANUAL_CHECKS.length + 1);
+    expect(csv).toContain('"fail","Menu ""Services"" can\'t be opened by keyboard"');
+    expect(csv).toContain('"n/a"');
+    expect(csv).toContain('"not checked"');
   });
 
   test('renders a report that escapes page content', () => {
