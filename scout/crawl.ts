@@ -20,6 +20,8 @@ import { Finding, PageResult, ScoutOptions, ScoutResult, Severity, Confidence } 
 const SKIP_EXTENSIONS = /\.(pdf|zip|gz|dmg|exe|msi|png|jpe?g|gif|svg|webp|mp4|mp3|woff2?|css|js)(\?|$)/i;
 const SEVERITY_ORDER: Severity[] = ['critical', 'high', 'medium', 'low', 'info'];
 const CONFIDENCE_ORDER: Confidence[] = ['confirmed', 'likely', 'heuristic'];
+/** Evidence samples kept per merged finding (enough to act on, small enough to read). */
+const MAX_SAMPLES = 10;
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -58,6 +60,9 @@ export function dedupe(findings: Finding[]): Finding[] {
     if (existing) {
       existing.pages = [...new Set([...existing.pages, ...f.pages])];
       existing.screenshot ??= f.screenshot;
+      if (f.samples?.length) {
+        existing.samples = [...new Set([...(existing.samples ?? []), ...f.samples])].slice(0, MAX_SAMPLES);
+      }
     } else {
       merged.set(key, { ...f, pages: [...f.pages] });
     }

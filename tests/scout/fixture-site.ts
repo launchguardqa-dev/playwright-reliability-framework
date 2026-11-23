@@ -26,13 +26,20 @@ export const PAGES: Record<string, string> = {
       <li><a href="/missing.html">Missing page</a></li>
       <li><a href="/private.html">Private page</a></li>
       <li><a href="/beacons.html">Beacons</a></li>
+      <li><a href="/a11y-more.html">More accessibility</a></li>
     </ul>`),
+
+  // Same "missing label" rule as /a11y.html, but with a different number of elements.
+  '/a11y-more.html': page('More accessibility', `
+    <input type="text">
+    <input type="email">`),
 
   // Three requests to one failing endpoint, differing only in the query string.
   '/beacons.html': page('Beacons', `
     <p>Sends analytics beacons with a timestamp, like real tracking scripts do.</p>
     <script>
       fetch('/api/beacon?t=1'); fetch('/api/beacon?t=2'); fetch('/api/beacon?t=3');
+      fetch('/api/me'); // session check: 401 for a signed-out visitor is expected
     </script>`),
 
   // Control: must produce no findings at all.
@@ -76,6 +83,11 @@ export async function startFixtureSite(): Promise<{ origin: string; close: () =>
       // A sign-in wall: intended behavior, not a broken page.
       res.writeHead(401, { 'content-type': 'text/html', 'www-authenticate': 'Basic realm="fixture"' });
       res.end('Not authorized');
+      return;
+    }
+    if (path === '/api/me') {
+      res.writeHead(401, { 'content-type': 'application/json' });
+      res.end('{"message":"Unauthorized"}');
       return;
     }
     if (path === '/api/beacon') {
