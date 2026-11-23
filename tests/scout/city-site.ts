@@ -13,6 +13,9 @@ import { LoggedRequest } from './fixture-site';
  *   third-party: it has an unnamed button, logs a console error and makes a failing request.
  *   A second, untitled player iframe is also embedded.
  * - The site's own content has one real problem: a logo image with no alt text.
+ * - The homepage also loads a web font and fetches JSON from that third party, which, like
+ *   real CDNs, allows simple CORS requests but REJECTS preflights. Any non-safelisted header
+ *   Scout adds to those requests (e.g. From) would make them fail.
  */
 
 const page = (title: string, body: string, opts: { canonical?: string } = {}) =>
@@ -33,7 +36,14 @@ const HOME_BODY = (embedOrigin: string) => `
   Council meets the first and third Tuesday of each month at 6 p.m. in council chambers,
   and every meeting is streamed live and archived below for residents who cannot attend.</p>
   <iframe title="City Council meeting video" src="${embedOrigin}/player" width="320" height="180"></iframe>
-  <iframe src="${embedOrigin}/player?autoplay=0" width="320" height="180"></iframe>`;
+  <iframe src="${embedOrigin}/player?autoplay=0" width="320" height="180"></iframe>
+  <style>@font-face { font-family: CityFont; src: url("${embedOrigin}/font.woff2"); } .notice { font-family: CityFont, sans-serif; }</style>
+  <p class="notice">Office hours change for the holidays.</p>
+  <p id="alerts">Loading alerts…</p>
+  <script>
+    fetch('${embedOrigin}/api/alerts').then(function (r) { return r.json(); })
+      .then(function (d) { document.getElementById('alerts').textContent = d.message; });
+  </script>`;
 
 const EMBED_PLAYER = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Player</title></head><body>
   <button class="play-icon"><svg width="16" height="16" aria-hidden="true"></svg></button>
@@ -53,12 +63,35 @@ export async function startCitySite(): Promise<{
   origin: string;
   embedOrigin: string;
   requests: LoggedRequest[];
+  /** Every request the third-party server received, with its headers. */
+  thirdPartyRequests: LoggedRequest[];
   close: () => Promise<void>;
 }> {
   const requests: LoggedRequest[] = [];
+  const thirdPartyRequests: LoggedRequest[] = [];
 
   const embed = http.createServer((req, res) => {
     const path = (req.url ?? '/').split('?')[0];
+    thirdPartyRequests.push({
+      method: req.method ?? 'GET', path, at: Date.now(),
+      userAgent: String(req.headers['user-agent'] ?? ''), from: req.headers.from as string | undefined,
+    });
+    if (req.method === 'OPTIONS') {
+      // Like real CDNs and APIs: no preflight support, so custom headers break the request.
+      res.writeHead(403);
+      res.end();
+      return;
+    }
+    if (path === '/font.woff2') {
+      res.writeHead(200, { 'content-type': 'font/woff2', 'access-control-allow-origin': '*' });
+      res.end(Buffer.alloc(64));
+      return;
+    }
+    if (path === '/api/alerts') {
+      res.writeHead(200, { 'content-type': 'application/json', 'access-control-allow-origin': '*' });
+      res.end('{"message":"No active alerts."}');
+      return;
+    }
     if (path === '/player') {
       res.writeHead(200, { 'content-type': 'text/html' });
       res.end(EMBED_PLAYER);
@@ -105,6 +138,7 @@ export async function startCitySite(): Promise<{
     origin,
     embedOrigin,
     requests,
+    thirdPartyRequests,
     close: async () => {
       await new Promise<void>((resolve) => site.close(() => resolve()));
       await new Promise<void>((resolve) => embed.close(() => resolve()));

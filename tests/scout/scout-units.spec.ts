@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { isFirstParty, wcagFromTags } from '../../scout/checks';
+import { isFirstParty, wcagFromTags, resourceUrlInMessage, checkJavaScript } from '../../scout/checks';
 import { dedupe } from '../../scout/crawl';
 import { analyzePdf, looksLikePdfLink, pdfFindings, pdfSummary } from '../../scout/pdf';
 import { parseRobots, fetchRobots } from '../../scout/robots';
@@ -152,5 +152,30 @@ test.describe('Scout: PDF detection and analysis', () => {
     expect(findings.map((f) => f.rule).sort()).toEqual(['pdf-no-language', 'pdf-no-title', 'pdf-untagged']);
 
     expect(pdfSummary(pdfs)).toMatchObject({ analyzed: 3, totalPages: 5, untagged: 2, untaggedPages: 4, noTitle: 2, noLang: 2 });
+  });
+});
+
+test.describe('Scout: console errors about third-party resources', () => {
+  const site = 'https://www.city.gov/';
+  const chromiumCors = "Access to font at 'https://fonts.gstatic.com/s/x.woff2' from origin 'https://www.city.gov' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource.";
+  const firefoxCors = 'Cross-Origin Request Blocked: The Same Origin Policy disallows reading the remote resource at https://maps.googleapis.com/maps/api/js. (Reason: CORS preflight response did not succeed).';
+
+  test('finds the resource a browser error is about', () => {
+    expect(resourceUrlInMessage(chromiumCors)).toBe('https://fonts.gstatic.com/s/x.woff2');
+    expect(resourceUrlInMessage(firefoxCors)).toBe('https://maps.googleapis.com/maps/api/js');
+    expect(resourceUrlInMessage('TypeError: x is undefined')).toBeUndefined();
+  });
+
+  test("attributes a CORS error the page logs about someone else's resource to that host", () => {
+    const events = { consoleErrors: [{ text: chromiumCors, source: site }], pageErrors: [], failedRequests: [] };
+    const [f] = checkJavaScript(events, site, site);
+    expect(f).toMatchObject({ rule: 'third-party-console-error', thirdParty: 'fonts.gstatic.com', severity: 'low' });
+  });
+
+  test("the site's own console errors are still the site's", () => {
+    const events = { consoleErrors: [{ text: 'Uncaught config error', source: site }], pageErrors: [], failedRequests: [] };
+    const [f] = checkJavaScript(events, site, site);
+    expect(f).toMatchObject({ rule: 'console-error', severity: 'medium' });
+    expect(f.thirdParty).toBeUndefined();
   });
 });

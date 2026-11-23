@@ -124,3 +124,49 @@ test.describe('Scout on a city site: third-party embeds', () => {
     expect(byCriterion).not.toContain(`embedded content from ${embedHost}`);
   });
 });
+
+test.describe('Scout on a city site: identification headers', () => {
+  test.describe.configure({ mode: 'default' }); // one shared public scan
+
+  let site: Awaited<ReturnType<typeof startCitySite>>;
+  let result: ScoutResult;
+
+  test.beforeAll(async ({ browser }, testInfo) => {
+    testInfo.setTimeout(120_000);
+    site = await startCitySite();
+    result = await runScout({
+      profile: { name: 'city', startUrl: `${site.origin}/` },
+      maxPages: 1, delayMs: 0, outDir: testInfo.outputPath('headers'), mode: 'public', contact: CONTACT,
+    }, browser);
+  });
+
+  test.afterAll(async () => {
+    await site?.close();
+  });
+
+  test('the scanned site gets the contact in the User-Agent and From header', () => {
+    expect(site.requests.length).toBeGreaterThan(0);
+    for (const r of site.requests) {
+      expect(r.from, `${r.method} ${r.path}`).toBe(CONTACT);
+      expect(r.userAgent, `${r.method} ${r.path}`).toContain(CONTACT);
+    }
+  });
+
+  test('third parties never receive the contact email, but still see the tool name', () => {
+    expect(site.thirdPartyRequests.length, 'the page did load third-party content').toBeGreaterThan(0);
+    for (const r of site.thirdPartyRequests) {
+      expect(r.from, `${r.method} ${r.path}`).toBeUndefined();
+      expect(r.userAgent, `${r.method} ${r.path}`).not.toContain(CONTACT);
+      expect(r.userAgent, `${r.method} ${r.path}`).toContain('LaunchGuardScout');
+    }
+  });
+
+  test('Scout does not break third-party loads: no CORS preflights, no CORS failures', () => {
+    const methods = site.thirdPartyRequests.map((r) => r.method);
+    expect(methods, 'a preflight means Scout added a non-safelisted header').not.toContain('OPTIONS');
+    const fetched = site.thirdPartyRequests.filter((r) => r.method === 'GET').map((r) => r.path);
+    expect(fetched).toEqual(expect.arrayContaining(['/font.woff2', '/api/alerts']));
+    const corsNoise = result.findings.filter((f) => /CORS|font\.woff2|\/api\/alerts/.test(`${f.detail} ${(f.samples ?? []).join(' ')}`));
+    expect(corsNoise, 'no findings caused by Scout itself').toEqual([]);
+  });
+});

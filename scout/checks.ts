@@ -88,6 +88,19 @@ export function thirdPartyHost(source: string | undefined, origin: string): stri
 }
 
 /**
+ * The resource a browser error message is about, for messages logged by the page itself
+ * about someone else's resource (so the script URL points at the site, not the culprit):
+ *   Chromium: Access to font at 'https://fonts.gstatic.com/x.woff2' from origin '...' has been blocked by CORS policy
+ *   Firefox:  Cross-Origin Request Blocked: ... reading the remote resource at https://maps.googleapis.com/x. (Reason: ...)
+ */
+export function resourceUrlInMessage(text: string): string | undefined {
+  const quoted = /^(?:Access to [\w ]+ at|[\w ]*(?:Failed|Unable) to load [\w ]*from|Refused to [\w ]+) '(https?:\/\/[^']+)'/i.exec(text);
+  if (quoted) return quoted[1];
+  const firefox = /remote resource at (https?:\/\/\S+?)\.? \(Reason:/i.exec(text);
+  return firefox?.[1];
+}
+
+/**
  * JavaScript errors, attributed to the site or to the third party whose script threw them
  * (embedded players, maps, analytics). Third-party errors are low severity: usually not
  * fixable by the site, though worth knowing about if something visible depends on them.
@@ -96,7 +109,9 @@ export function checkJavaScript(events: PageEvents, url: string, origin = url): 
   const out: Finding[] = [];
   const seen = new Set<string>();
   const add = (kind: 'js' | 'console', m: SourcedMessage) => {
-    const host = thirdPartyHost(m.source, origin);
+    // Who's responsible: the script that logged it, or (for errors the page logs ABOUT a
+    // resource, like a blocked font) the resource's own host.
+    const host = thirdPartyHost(m.source, origin) ?? thirdPartyHost(resourceUrlInMessage(m.text), origin);
     const key = `${kind}|${host ?? ''}|${m.text}`;
     if (seen.has(key)) return;
     seen.add(key);

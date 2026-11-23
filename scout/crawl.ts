@@ -111,9 +111,13 @@ export function dedupe(findings: Finding[]): Finding[] {
     || b.pages.length - a.pages.length);
 }
 
-/** User-Agent that identifies Scout. Keeps the "Mozilla/5.0 (compatible; ...)" form crawlers use. */
-export function scoutUserAgent(contact: string): string {
-  return `Mozilla/5.0 (compatible; ${SCOUT_TOKEN}/1.0; accessibility audit; contact: ${contact})`;
+/**
+ * User-Agent that identifies Scout. Keeps the "Mozilla/5.0 (compatible; ...)" form crawlers use.
+ * With a contact it's for the scanned site only; without one it's the browser-wide default,
+ * so third parties (fonts, maps, video players) see the tool's name but never the email.
+ */
+export function scoutUserAgent(contact?: string): string {
+  return `Mozilla/5.0 (compatible; ${SCOUT_TOKEN}/1.0; accessibility audit${contact ? `; contact: ${contact}` : ''})`;
 }
 
 export async function runScout(options: ScoutOptions, existingBrowser?: Browser): Promise<ScoutResult> {
@@ -138,12 +142,39 @@ export async function runScout(options: ScoutOptions, existingBrowser?: Browser)
   const browser = existingBrowser ?? await chromium.launch(options.watch
     ? { headless: false, channel: 'chrome', slowMo: options.watch.slowMo }
     : {});
+  // Identification goes ONLY to the scanned site's own origin:
+  // - "From" isn't a CORS-safelisted header, so adding it to cross-origin requests forces a
+  //   preflight that font CDNs, map APIs and video players reject. Scout would then report
+  //   failures it caused itself (seen live: Google Fonts "blocked by CORS policy").
+  // - The contact email must not be sent to third parties at all.
+  // So the browser-wide User-Agent names the tool without the email, and same-origin requests
+  // get the full User-Agent and From header via routing. Same-origin requests are never
+  // subject to CORS. The site's own subdomains are cross-origin to the browser, so they're
+  // left alone too.
+  const identity = options.contact
+    ? { 'user-agent': scoutUserAgent(options.contact), from: options.contact }
+    : undefined;
   const context = await browser.newContext({
     viewport: { width: 1280, height: 800 },
-    ...(options.contact
-      ? { userAgent: scoutUserAgent(options.contact), extraHTTPHeaders: { From: options.contact } }
-      : {}),
+    ...(identity ? { userAgent: scoutUserAgent() } : {}),
   });
+  if (identity) {
+    await context.route('**/*', async (route) => {
+      const request = route.request();
+      let sameOrigin = false;
+      try {
+        sameOrigin = new URL(request.url()).origin === origin;
+      } catch {
+        sameOrigin = false;
+      }
+      await (sameOrigin
+        ? route.continue({ headers: { ...request.headers(), ...identity } })
+        : route.continue()
+      ).catch(() => {}); // the page may have navigated away mid-request
+    });
+  }
+  /** Headers for Scout's own direct requests (robots.txt, PDFs, link checks): not browser CORS. */
+  const directHeaders = identity ? { headers: identity } : {};
   const page = await context.newPage();
   const events = collectEvents(page);
   const startedAt = new Date();
@@ -159,7 +190,7 @@ export async function runScout(options: ScoutOptions, existingBrowser?: Browser)
     const robotsSkipped: string[] = [];
     if (isPublic) {
       robots = await fetchRobots(async (url) => {
-        const res = await context.request.get(url, { timeout: 15_000, maxRedirects: 3 }).catch(() => null);
+        const res = await context.request.get(url, { timeout: 15_000, maxRedirects: 3, ...directHeaders }).catch(() => null);
         return res ? { status: res.status(), text: await res.text().catch(() => '') } : null;
       }, origin);
       log(`robots.txt: ${robots.status}`);
@@ -317,7 +348,7 @@ export async function runScout(options: ScoutOptions, existingBrowser?: Browser)
     const unchecked = isPublic ? []
       : [...referrers.keys()].filter((l) => !statusByUrl.has(l) && allowed(l)).slice(0, 25);
     for (const link of unchecked) {
-      const res = await context.request.get(link, { maxRedirects: 5, timeout: 15_000 }).catch(() => null);
+      const res = await context.request.get(link, { maxRedirects: 5, timeout: 15_000, ...directHeaders }).catch(() => null);
       statusByUrl.set(link, res ? res.status() : null);
     }
 
@@ -387,7 +418,7 @@ export async function runScout(options: ScoutOptions, existingBrowser?: Browser)
       }
       fetched++;
       await sleep(delayMs);
-      const head = await context.request.head(url, { timeout: 30_000, maxRedirects: 5 }).catch(() => null);
+      const head = await context.request.head(url, { timeout: 30_000, maxRedirects: 5, ...directHeaders }).catch(() => null);
       const type = head?.headers()['content-type'] ?? '';
       const length = Number(head?.headers()['content-length']);
       if (Number.isFinite(length) && length > 0) result.bytes = length;
@@ -405,7 +436,7 @@ export async function runScout(options: ScoutOptions, existingBrowser?: Browser)
         continue;
       }
       log(`  PDF ${fetched}/${Math.min(pdfCap, pdfLinks.size)}: ${url}`);
-      const res = await context.request.get(url, { timeout: 60_000, maxRedirects: 5 }).catch((e: Error) => e);
+      const res = await context.request.get(url, { timeout: 60_000, maxRedirects: 5, ...directHeaders }).catch((e: Error) => e);
       if (res instanceof Error || !res.ok()) {
         result.error = res instanceof Error ? res.message.split('\n')[0] : `HTTP ${res.status()}`;
         continue;
