@@ -7,6 +7,7 @@ import {
   checkAccessibility, checkMobile, checkPerformance, isFirstParty,
 } from './checks';
 import { analyzePdf, looksLikePdfLink, pdfFindings } from './pdf';
+import { detectBlock } from './blocked';
 import { fetchRobots, Robots, SCOUT_TOKEN } from './robots';
 import { Finding, PageResult, PdfResult, ScoutOptions, ScoutResult, Severity, Confidence } from './types';
 
@@ -233,6 +234,7 @@ export async function runScout(options: ScoutOptions, existingBrowser?: Browser)
     // final URL after redirects, canonical link), so a later link to any of them is
     // skipped WITHOUT a request. Pages that only turn out to be duplicates after loading
     // (identical visible text) are dropped from the results.
+    let blocked: ScoutResult['blocked'];
     const knownPages = new Map<string, string>(); // pageKey -> url of the scanned page it belongs to
     const contentSeen = new Map<string, string>(); // text fingerprint -> scanned page url
     const duplicates: { url: string; duplicateOf: string; reason: string }[] = [];
@@ -275,10 +277,26 @@ export async function runScout(options: ScoutOptions, existingBrowser?: Browser)
       const loadMs = Date.now() - t0;
       // Give single-page apps a moment to render and surface late errors.
       await page.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => {});
+
+      // Bot protection (CDN/WAF block or challenge page)? Then this isn't the site: stop.
+      // Nothing on a block page may be reported as the site's, and once a site starts
+      // blocking, further requests are unwelcome (and, in a public scan, not ours to make).
+      const seen = await page.evaluate(() => ({ title: document.title, text: (document.body?.innerText ?? '').trim() }))
+        .catch(() => ({ title: '', text: '' }));
+      const isStart = navigations === 1;
+      const block = detectBlock(status, seen.title, seen.text, isStart);
+      if (block) {
+        const shot = nextShot();
+        await page.screenshot({ path: shot.absolute, fullPage: false }).catch(() => {});
+        blocked = { url, status, title: seen.title.trim(), vendor: block.vendor, atStart: isStart, screenshot: shot.relative };
+        log(`  BLOCKED by ${block.vendor} (HTTP ${status}${seen.title ? ` "${seen.title.trim()}"` : ''}): stopping the scan`);
+        break;
+      }
       statusByUrl.set(url, status);
-      if (status !== null && status >= 400) {
+      if (status === 404 || status === 410) {
         // Single-page apps often serve every route with a 404 status and render it client-side.
         // Distinguish "really missing" from "renders fine for users, wrong status for crawlers".
+        // Only 404/410: a 401/403/429/5xx page is never treated as the site's content.
         const rendered = await page.evaluate(() => {
           const text = (document.body?.innerText ?? '').trim();
           const head = `${document.title} ${text.slice(0, 300)}`;
@@ -344,8 +362,9 @@ export async function runScout(options: ScoutOptions, existingBrowser?: Browser)
     }
 
     // Same-origin links found but not visited (page limit): check their status directly.
-    // Skipped in public scans: requests beyond the sampled pages need permission.
-    const unchecked = isPublic ? []
+    // Skipped in public scans (requests beyond the sampled pages need permission) and after
+    // a block (the site has said no).
+    const unchecked = isPublic || blocked ? []
       : [...referrers.keys()].filter((l) => !statusByUrl.has(l) && allowed(l)).slice(0, 25);
     for (const link of unchecked) {
       const res = await context.request.get(link, { maxRedirects: 5, timeout: 15_000, ...directHeaders }).catch(() => null);
@@ -408,6 +427,10 @@ export async function runScout(options: ScoutOptions, existingBrowser?: Browser)
     for (const [url, from] of pdfLinks) {
       const result: PdfResult = { url, linkedFrom: [...from], analyzed: false };
       pdfs.push(result);
+      if (blocked) {
+        result.skippedReason = 'not requested: the site blocked automated access';
+        continue;
+      }
       if (!robotsAllow(url)) {
         result.skippedReason = 'disallowed by robots.txt';
         continue;
@@ -446,6 +469,27 @@ export async function runScout(options: ScoutOptions, existingBrowser?: Browser)
     }
     siteFindings.push(...pdfFindings(pdfs));
 
+    if (blocked) {
+      const where = blocked.atStart ? '' : ` at ${new URL(blocked.url).pathname}`;
+      const what = `HTTP ${blocked.status}${blocked.title ? ` "${blocked.title}"` : ''}`;
+      const advice = isPublic
+        ? 'Request permission before testing. The site owner can allowlist Scout\'s User-Agent (LaunchGuardScout) or your IP address for an authorized scan.'
+        : 'Ask the site owner to allowlist Scout\'s User-Agent (LaunchGuardScout) or your IP address in their firewall or CDN, then run the scan again.';
+      siteFindings.push({
+        rule: 'access-blocked',
+        title: blocked.atStart
+          ? `Site blocks automated access (${what})`
+          : `Site started blocking automated access during the scan (${what}${where})`,
+        severity: 'info', confidence: 'confirmed', category: 'http',
+        pages: [blocked.url],
+        screenshot: blocked.screenshot,
+        detail: (blocked.atStart
+          ? `The site's bot protection (${blocked.vendor}) answered with a block page instead of the site, so no accessibility, mobile or performance checks were run. This says nothing about the site's own accessibility. `
+          : `Bot protection (${blocked.vendor}) answered instead of the site, so Scout stopped. Findings cover only the ${pages.length} page(s) scanned before the block. `)
+          + advice,
+      });
+    }
+
     return {
       target: profile.startUrl,
       profile: profile.name,
@@ -458,6 +502,7 @@ export async function runScout(options: ScoutOptions, existingBrowser?: Browser)
       pdfs,
       robots: robots ? { checked: true, skipped: robotsSkipped } : undefined,
       duplicates,
+      blocked,
     };
   } finally {
     await context.close();
