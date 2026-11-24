@@ -51,6 +51,10 @@ test.describe('LaunchGuard Scout', () => {
     expect(duplicate?.samples).toEqual(expect.arrayContaining(['Red shirt', 'Blue hat', 'Green bag']));
   });
 
+  test('lazy-loading placeholders are not reported as duplicate or "not found" images', () => {
+    expect(on('/lazy.html').filter((f) => f.category === 'images'), 'any image finding here is a false positive').toEqual([]);
+  });
+
   test('catches uncaught errors, console errors and failed requests', () => {
     const findings = on('/errors.html');
     expect(findings.find((f) => f.rule === 'js-error')?.detail).toContain('Fixture uncaught error');

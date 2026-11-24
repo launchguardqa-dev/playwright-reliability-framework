@@ -1,6 +1,6 @@
 # playwright-reliability-framework
 
-> A Playwright + TypeScript automation framework built for reliability, maintainability, and CI stability. 181 tests across auth, cart, checkout, product, sorting, and navigation flows, a bug-detection matrix that proves the checks catch real defects, and LaunchGuard Scout, an automated QA scanner for any site. Gated by lint and typecheck in CI.
+> A Playwright + TypeScript automation framework built for reliability, maintainability, and CI stability. 182 tests across auth, cart, checkout, product, sorting, and navigation flows, a bug-detection matrix that proves the checks catch real defects, and LaunchGuard Scout, an automated QA scanner for any site. Gated by lint and typecheck in CI.
 
 [![Playwright Tests](https://github.com/launchguardqa-dev/playwright-reliability-framework/actions/workflows/playwright.yml/badge.svg)](https://github.com/launchguardqa-dev/playwright-reliability-framework/actions/workflows/playwright.yml)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue)
@@ -223,6 +223,8 @@ Both fixes are covered by a fixture "city site" (`tests/scout/city-site.ts`) mod
 
 `tests/scout/navigating-site.ts` makes its directory page navigate the instant Scout's accessibility checker is injected, so the navigation always lands mid-analysis (deterministic, not timing-based). It covers a redirect to a new page, a page that reloads every time it's checked, a redirect to a page already scanned, and the public budget. All 4 tests fail on the previous code, and they passed 20/20 over 5 repeats with retries off.
 
+**Lazy-loading placeholders were flagged as "duplicate images."** On two city sites, carousels and news lists start every image on one placeholder (an inline 1×1 GIF on one, a shared `blank.png` on the other) and keep the real address in `data-src`/`data-lazy` until it scrolls into view. Scout saw a dozen different items "sharing one image file." Now each image is judged by the image it will actually show (its lazy-load address), and inline `data:` placeholders are ignored. A fixture page covers both patterns; its test fails on the previous code, while the real-duplicate test (three products sharing one file) still catches genuine bugs.
+
 ### What it found on SauceDemo
 
 | User | Scout's findings |
@@ -311,7 +313,7 @@ playwright-reliability-framework/
 │   ├── product/product.spec.ts   # Product detail page (6)
 │   ├── sorting/sorting.spec.ts   # Sort order data integrity (6)
 │   ├── users/user-variants.spec.ts # 8 checks × 5 users: proves checks catch bugs (40)
-│   ├── scout/                    # Scout's own tests against a planted-bug fixture site, a city site, blocked sites, self-navigating pages, public-scan limits, unit tests (99)
+│   ├── scout/                    # Scout's own tests against a planted-bug fixture site, a city site, blocked sites, self-navigating pages, public-scan limits, unit tests (100)
 │   └── smoke/                    # @smoke tag docs
 ├── scout/                        # LaunchGuard Scout scanner (crawl, checks, report, CLI, profiles)
 ├── .claude/skills/qa-run/        # /qa-run Claude Code skill: AI triage on top of Scout
