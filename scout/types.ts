@@ -56,6 +56,8 @@ export interface PdfResult {
   url: string;
   /** HTML pages that link to this PDF. */
   linkedFrom: string[];
+  /** Set when the document lives on a third-party platform (e.g. "cityname.legistar.com"). */
+  host?: string;
   /** Size from Content-Length, when the server reports it. */
   bytes?: number;
   /** False when only metadata was fetched (public scan) or the file was skipped. */
@@ -128,6 +130,11 @@ export interface ScoutOptions {
   contact?: string;
   /** Max PDFs to download and analyze in authorized mode (default 20). */
   maxPdfs?: number;
+  /**
+   * Extra hosts where the agency publishes documents, beyond the built-in agenda
+   * platforms (Legistar, Granicus, eScribe...). Suffix match, e.g. "docs.vendor.com".
+   */
+  documentHosts?: string[];
   /** Called with progress messages. */
   log?: (message: string) => void;
 }

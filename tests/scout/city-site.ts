@@ -1,6 +1,7 @@
 import * as http from 'http';
 import { AddressInfo } from 'net';
 import { LoggedRequest } from './fixture-site';
+import { makePdf } from './pdf-fixtures';
 
 /**
  * A miniature government site modeled on a real first run (Granicus GovAccess/OpenCities):
@@ -43,6 +44,11 @@ const HOME_BODY = (embedOrigin: string) => `
   <link rel="stylesheet" href="${embedOrigin}/brand.css" crossorigin="anonymous">
   <p class="notice">Office hours change for the holidays.</p>
   <p id="alerts">Loading alerts…</p>
+  <ul>
+    <li><a href="${embedOrigin}/View.ashx?M=A&amp;ID=101">Council agenda (Legistar-style)</a></li>
+    <li><a href="${embedOrigin}/View.ashx?M=F&amp;ID=102">Meeting details (a web page, not a PDF)</a></li>
+    <li><a href="${embedOrigin}/meeting/packet.pdf">Agenda packet</a></li>
+  </ul>
   <script>
     fetch('${embedOrigin}/api/alerts').then(function (r) { return r.json(); })
       .then(function (d) { document.getElementById('alerts').textContent = d.message; });
@@ -72,6 +78,9 @@ export async function startCitySite(): Promise<{
 }> {
   const requests: LoggedRequest[] = [];
   const thirdPartyRequests: LoggedRequest[] = [];
+  // Documents on the third-party "agenda platform" (the same local host as the embed).
+  const agendaPdf = Buffer.from(await makePdf({ pages: 4 })); // untagged, no title or language
+  const packetPdf = Buffer.from(await makePdf({ pages: 2, title: 'Agenda Packet', lang: 'en-US', tagged: true }));
 
   const embed = http.createServer((req, res) => {
     const path = (req.url ?? '/').split('?')[0];
@@ -83,6 +92,19 @@ export async function startCitySite(): Promise<{
       // Like real CDNs and APIs: no preflight support, so custom headers break the request.
       res.writeHead(403);
       res.end();
+      return;
+    }
+    if (path === '/View.ashx' || path === '/meeting/packet.pdf') {
+      const id = new URL(req.url ?? '/', 'http://x').searchParams.get('ID');
+      // Legistar-style: the same endpoint serves a PDF for one ID and an HTML page for another.
+      const pdf = path === '/meeting/packet.pdf' ? packetPdf : id === '101' ? agendaPdf : undefined;
+      if (pdf) {
+        res.writeHead(200, { 'content-type': 'application/pdf', 'content-length': pdf.byteLength });
+        res.end(req.method === 'HEAD' ? undefined : pdf);
+      } else {
+        res.writeHead(200, { 'content-type': 'text/html' });
+        res.end(req.method === 'HEAD' ? undefined : '<!doctype html><html lang="en"><head><title>Meeting details</title></head><body><h1>Meeting details</h1></body></html>');
+      }
       return;
     }
     if (path === '/brand.css') {
