@@ -1,6 +1,6 @@
 # playwright-reliability-framework
 
-> A Playwright + TypeScript automation framework built for reliability, maintainability, and CI stability. 177 tests across auth, cart, checkout, product, sorting, and navigation flows, a bug-detection matrix that proves the checks catch real defects, and LaunchGuard Scout, an automated QA scanner for any site. Gated by lint and typecheck in CI.
+> A Playwright + TypeScript automation framework built for reliability, maintainability, and CI stability. 181 tests across auth, cart, checkout, product, sorting, and navigation flows, a bug-detection matrix that proves the checks catch real defects, and LaunchGuard Scout, an automated QA scanner for any site. Gated by lint and typecheck in CI.
 
 [![Playwright Tests](https://github.com/launchguardqa-dev/playwright-reliability-framework/actions/workflows/playwright.yml/badge.svg)](https://github.com/launchguardqa-dev/playwright-reliability-framework/actions/workflows/playwright.yml)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue)
@@ -213,7 +213,15 @@ Both fixes are covered by a fixture "city site" (`tests/scout/city-site.ts`) mod
 - **On a block, Scout stops:** no further pages, no PDFs, no link checks, no retries. It reports one *info* finding, "Site blocks automated access (HTTP 403 "Access Denied")", saying no checks were run and what to do (request permission in a public scan; allowlist Scout's User-Agent or IP in an authorized one). A block partway through keeps only the pages scanned before it.
 - **The government report says so plainly,** with no summary, findings or checklist, and the CLI exits with code 3.
 
-`tests/scout/blocked-site.ts` serves an Akamai-style 403, a Cloudflare 503 challenge, a 401, a 429, a site that blocks on its second page, and a single-page app that renders real content with a 404. Every block page has issues axe would flag, so any content finding means the block page was analyzed. 20 of the 23 new tests fail on the previous code; the other 3 are guards that make sure real pages are never called blocks.
+`tests/scout/blocked-site.ts` serves an Akamai-style 403, a Cloudflare 503 challenge, a 401, a 429, a site that blocks on its second page, and a single-page app that renders real content with a 404. Every block page has issues axe would flag, so any content finding means the block page was analyzed. 20 of the 23 new tests fail on the previous code; the other 3 are guards that make sure real pages are never called blocks. Re-scanning the same city afterwards confirmed it live: one info finding ("BLOCKED by Akamai"), zero false findings, exit code 3.
+
+**A page that navigated on its own crashed a whole scan and lost every finding.** A CivicPlus directory page (`directory.aspx`) navigated right after loading. Scout's page reads threw *"Execution context was destroyed"*, the error escaped the crawl, and the CLI exited without writing a report, so the results for the pages already scanned were lost. Now:
+- **Each page is analyzed in one step that commits only at the end,** so a half-read page never leaks into the results.
+- **On a navigation error, Scout waits for the navigation to commit,** sees where the page landed, and retries once: on the new page (if it's new), as a duplicate (if it's already scanned), or on the same page (if it reloaded). Still failing → a low "Page changed while being checked" finding, and the scan moves on. Any other per-page error is recorded the same way instead of ending the scan.
+- **Page-initiated navigations count against the public-scan budget,** and once it's spent they're refused. The old code made 4 page loads in a "3 pages max" scan because a self-reloading page went uncounted.
+- **An unexpected error later in the scan still writes the report** for everything completed, and the CLI exits 2.
+
+`tests/scout/navigating-site.ts` makes its directory page navigate the instant Scout's accessibility checker is injected, so the navigation always lands mid-analysis (deterministic, not timing-based). It covers a redirect to a new page, a page that reloads every time it's checked, a redirect to a page already scanned, and the public budget. All 4 tests fail on the previous code, and they passed 20/20 over 5 repeats with retries off.
 
 ### What it found on SauceDemo
 
@@ -303,7 +311,7 @@ playwright-reliability-framework/
 │   ├── product/product.spec.ts   # Product detail page (6)
 │   ├── sorting/sorting.spec.ts   # Sort order data integrity (6)
 │   ├── users/user-variants.spec.ts # 8 checks × 5 users: proves checks catch bugs (40)
-│   ├── scout/                    # Scout's own tests against a planted-bug fixture site, a city site, blocked sites, public-scan limits, unit tests (95)
+│   ├── scout/                    # Scout's own tests against a planted-bug fixture site, a city site, blocked sites, self-navigating pages, public-scan limits, unit tests (99)
 │   └── smoke/                    # @smoke tag docs
 ├── scout/                        # LaunchGuard Scout scanner (crawl, checks, report, CLI, profiles)
 ├── .claude/skills/qa-run/        # /qa-run Claude Code skill: AI triage on top of Scout

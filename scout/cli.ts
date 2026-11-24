@@ -136,6 +136,12 @@ async function main() {
   console.log(`\nReport:   ${path.resolve(outDir, 'report.html')}`);
   console.log(`Raw data: ${path.resolve(outDir, 'findings.json')}\n`);
 
+  if (result.aborted) {
+    console.error(`Scout: the scan stopped early because of an unexpected error: ${result.aborted}`);
+    console.error(`  The report covers the ${result.pages.length} page(s) completed before it.\n`);
+    process.exit(2);
+  }
+
   if (result.blocked) {
     const b = result.blocked;
     const what = `HTTP ${b.status}${b.title ? ` "${b.title}"` : ''}, ${b.vendor}`;
