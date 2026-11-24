@@ -45,6 +45,29 @@ const MAX_SAMPLES = 10;
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** Errors that mean the page navigated (or reloaded) while Scout was reading it. */
+export function isNavigationError(message: string): boolean {
+  return /execution context was destroyed|because of a navigation|navigated while being checked|frame was detached|target (page, context or browser )?has been closed|cannot find context with specified id/i.test(message);
+}
+
+/** One finding per page whose checks couldn't be completed (it kept navigating, or a check failed). */
+function incompleteFindings(list: { url: string; reason: string }[]): Finding[] {
+  return list.map(({ url, reason }) => ({
+    rule: 'page-check-incomplete',
+    title: 'Page changed while being checked',
+    severity: 'low' as const, confidence: 'confirmed' as const, category: 'http' as const,
+    pages: [url],
+    detail: `${url}: checks incomplete (${reason}). Other pages were scanned normally; check this one by hand.`,
+  }));
+}
+
+/** What analyzing one loaded page produced. Committed by the crawl loop only on success. */
+type PageOutcome =
+  | { kind: 'page'; result: PageResult; rendered: boolean; names: string[]; fingerprint?: string; links: { href: string; inNav: boolean }[] }
+  | { kind: 'duplicate'; sameAs: string; names: string[] }
+  | { kind: 'blocked'; blocked: NonNullable<ScoutResult['blocked']> }
+  | { kind: 'incomplete'; reason: string };
+
 /**
  * Query parameters that never change what a page shows: tracking tags, and language
  * switches like Granicus/OpenCities' oc_lang. Dropping them stops one page from being
@@ -159,9 +182,29 @@ export async function runScout(options: ScoutOptions, existingBrowser?: Browser)
     viewport: { width: 1280, height: 800 },
     ...(identity ? { userAgent: scoutUserAgent() } : {}),
   });
+  // Page loads count against the page budget, including ones the PAGE starts on its own
+  // (client-side redirects, reloads, auto-submitted forms) after Scout's navigation.
+  let navigations = 0;
+  let scoutNavigating = false;
   if (identity) {
     await context.route('**/*', async (route) => {
       const request = route.request();
+      let mainFrameNavigation = false;
+      try {
+        mainFrameNavigation = request.isNavigationRequest() && request.frame() === page.mainFrame();
+      } catch {
+        mainFrameNavigation = false;
+      }
+      if (mainFrameNavigation && !scoutNavigating) {
+        // A public scan promises at most PUBLIC_MAX_PAGES page loads, so once the budget
+        // is spent, a page-initiated navigation is refused (the page stays where it is).
+        if (isPublic && navigations >= maxPages) {
+          log(`  refused a page-initiated navigation to ${request.url()}: page budget (${maxPages}) spent`);
+          await route.abort('blockedbyclient').catch(() => {});
+          return;
+        }
+        navigations++;
+      }
       let sameOrigin = false;
       try {
         sameOrigin = new URL(request.url()).origin === origin;
@@ -178,6 +221,18 @@ export async function runScout(options: ScoutOptions, existingBrowser?: Browser)
   const directHeaders = identity ? { headers: identity } : {};
   const page = await context.newPage();
   const events = collectEvents(page);
+  // The latest main-frame document response, so a page that navigates itself still gets
+  // the right HTTP status.
+  let lastDocument: { url: string; status: number } | undefined;
+  page.on('response', (response) => {
+    try {
+      if (response.request().isNavigationRequest() && response.frame() === page.mainFrame()) {
+        lastDocument = { url: response.url(), status: response.status() };
+      }
+    } catch {
+      // frame gone: nothing to record
+    }
+  });
   const startedAt = new Date();
 
   let shotCount = 0;
@@ -241,8 +296,79 @@ export async function runScout(options: ScoutOptions, existingBrowser?: Browser)
     // Links inside <nav>/<header> are queued ahead of the rest, so a small budget
     // (a 3-page public scan) covers the homepage plus top-level sections.
     const navQueue: string[] = [];
-    let navigations = 0;
+    let scoutNavigations = 0;
+    const incomplete: { url: string; reason: string }[] = [];
 
+    /**
+     * Reads everything Scout needs from the loaded page WITHOUT committing anything:
+     * the caller commits on success. Page reads are not error-swallowed here, so a page
+     * that navigates mid-analysis surfaces as a navigation error the caller can retry.
+     */
+    const analyzePage = async (target: string, status: number | null, isStart: boolean, loadMs: number): Promise<PageOutcome> => {
+      const startedAt = page.url();
+      const seen = await page.evaluate(() => ({
+        title: document.title,
+        text: (document.body?.innerText ?? '').trim(),
+        canonical: (document.querySelector('link[rel="canonical"]') as HTMLLinkElement | null)?.href ?? '',
+      }));
+
+      // Bot protection (CDN/WAF block or challenge page)? Then this isn't the site: stop.
+      // Nothing on a block page may be reported as the site's, and once a site starts
+      // blocking, further requests are unwelcome (and, in a public scan, not ours to make).
+      const block = detectBlock(status, seen.title, seen.text, isStart);
+      if (block) {
+        const shot = nextShot();
+        await page.screenshot({ path: shot.absolute, fullPage: false }).catch(() => {});
+        return { kind: 'blocked', blocked: { url: target, status, title: seen.title.trim(), vendor: block.vendor, atStart: isStart, screenshot: shot.relative } };
+      }
+
+      // Single-page apps often serve every route with a 404 status and render it client-side.
+      // Distinguish "really missing" from "renders fine for users, wrong status for crawlers".
+      // Only 404/410: a 401/403/429/5xx page is never treated as the site's content.
+      const rendered = (status === 404 || status === 410)
+        && seen.text.length > 40
+        && !/\b(404|not found|page not found|error)\b/i.test(`${seen.title} ${seen.text.slice(0, 300)}`);
+
+      // This page's names, and whether it's a duplicate discovered only now.
+      const text = seen.text.replace(/\s+/g, ' ');
+      const names = [target, page.url(), seen.canonical]
+        .filter((n) => /^https?:/i.test(n) && n.startsWith(origin))
+        .map(pageKey);
+      const fingerprint = text.length >= 200 ? createHash('sha1').update(text).digest('hex') : undefined;
+      const sameAs = names.map((k) => knownPages.get(k)).find(Boolean) ?? (fingerprint ? contentSeen.get(fingerprint) : undefined);
+      if (sameAs) return { kind: 'duplicate', sameAs, names };
+
+      const shot = nextShot();
+      await page.screenshot({ path: shot.absolute, fullPage: true }).catch(() => {});
+
+      // On an error page (a 404, a 401 sign-in wall, a failed load) the browser is showing an
+      // error screen, not the site's content, so content checks would only produce noise.
+      // The status itself is reported once the crawl finishes.
+      const errorPage = status === null || (status >= 400 && !rendered);
+      const findings: Finding[] = errorPage ? [] : [
+        ...checkJavaScript(events, target, origin),
+        ...checkNetwork(events, target, origin),
+        ...await checkImages(page, target),
+        ...await checkAccessibility(page, target, origin).catch((e: Error) => {
+          if (isNavigationError(e.message)) throw e; // let the caller retry
+          log(`  axe failed: ${e.message}`);
+          return [];
+        }),
+        ...await checkMobile(page, target, nextShot),
+        ...checkPerformance(loadMs, target),
+      ];
+      const title = await page.title();
+      const links = await page.$$eval('a[href]', (as) => as.map((a) => ({
+        href: (a as HTMLAnchorElement).href,
+        inNav: !!a.closest('nav, header, [role="navigation"]'),
+      })));
+      // A navigation that completed between reads wouldn't throw, but the results would mix
+      // two pages. Treat it the same as one that interrupted a read.
+      if (page.url() !== startedAt) throw new Error('page navigated while being checked');
+      return { kind: 'page', result: { url: target, status, loadMs, title, screenshot: shot.relative, findings }, rendered, names, fingerprint, links };
+    };
+
+    try {
     while ((navQueue.length || queue.length) && pages.length < maxPages && (!isPublic || navigations < maxPages)) {
       const url = navQueue.length ? navQueue.shift()! : queue.shift()!;
       if (visited.has(url) || !allowed(url)) continue;
@@ -259,13 +385,15 @@ export async function runScout(options: ScoutOptions, existingBrowser?: Browser)
       }
       if (navigations) await sleep(delayMs);
       navigations++;
+      scoutNavigations++;
 
       log(`[${pages.length + 1}/${maxPages}] ${url}`);
       events.reset();
       const t0 = Date.now();
       let status: number | null = null;
       try {
-        const response = await page.goto(url, { waitUntil: 'load', timeout: 30_000 });
+        scoutNavigating = true;
+        const response = await page.goto(url, { waitUntil: 'load', timeout: 30_000 }).finally(() => { scoutNavigating = false; });
         status = response?.status() ?? null;
       } catch (e) {
         const message = (e as Error).message.split('\n')[0];
@@ -278,85 +406,88 @@ export async function runScout(options: ScoutOptions, existingBrowser?: Browser)
       // Give single-page apps a moment to render and surface late errors.
       await page.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => {});
 
-      // Bot protection (CDN/WAF block or challenge page)? Then this isn't the site: stop.
-      // Nothing on a block page may be reported as the site's, and once a site starts
-      // blocking, further requests are unwelcome (and, in a public scan, not ours to make).
-      const seen = await page.evaluate(() => ({ title: document.title, text: (document.body?.innerText ?? '').trim() }))
-        .catch(() => ({ title: '', text: '' }));
-      const isStart = navigations === 1;
-      const block = detectBlock(status, seen.title, seen.text, isStart);
-      if (block) {
-        const shot = nextShot();
-        await page.screenshot({ path: shot.absolute, fullPage: false }).catch(() => {});
-        blocked = { url, status, title: seen.title.trim(), vendor: block.vendor, atStart: isStart, screenshot: shot.relative };
-        log(`  BLOCKED by ${block.vendor} (HTTP ${status}${seen.title ? ` "${seen.title.trim()}"` : ''}): stopping the scan`);
+      // Analyze the page. Pages that navigate on their own after "load" (client-side
+      // redirects, CMS postbacks, reloads) can pull the page out from under any read, so
+      // analysis is one step that only commits its results at the end, and a navigation
+      // error gets one retry on wherever the page ended up. Nothing here may abort the scan.
+      const isStart = scoutNavigations === 1;
+      let target = url;
+      let targetStatus = status;
+      let outcome: PageOutcome | undefined;
+      for (let attempt = 1; attempt <= 2 && !outcome; attempt++) {
+        try {
+          outcome = await analyzePage(target, targetStatus, isStart, loadMs);
+        } catch (e) {
+          const message = (e as Error).message.split('\n')[0];
+          if (attempt === 2 || !isNavigationError(message)) {
+            outcome = { kind: 'incomplete', reason: isNavigationError(message) ? 'kept changing while being checked' : message };
+            break;
+          }
+          // Let the page settle, then see where it went. When the error fires, the navigation
+          // has started but may not have committed yet (page.url() still shows the old
+          // address), so wait for the main frame to actually navigate before reading it.
+          if (normalize(page.url()) === normalize(target)) {
+            await page.waitForEvent('framenavigated', { predicate: (f) => f === page.mainFrame(), timeout: 5_000 }).catch(() => {});
+          }
+          await page.waitForLoadState('load', { timeout: 15_000 }).catch(() => {});
+          await page.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => {});
+          const landed = normalize(page.url());
+          if (pageKey(landed) === pageKey(target)) {
+            log('  page reloaded itself while being checked; retrying once');
+            continue;
+          }
+          log(`  page navigated to ${landed} while being checked`);
+          if (!landed.startsWith(origin)) {
+            outcome = { kind: 'incomplete', reason: `navigated away from the site, to ${landed}` };
+          } else if (knownPages.has(pageKey(landed)) || (visited.has(landed) && landed !== url)) {
+            outcome = { kind: 'duplicate', sameAs: knownPages.get(pageKey(landed)) ?? landed, names: [pageKey(url)] };
+          } else {
+            visited.add(landed);
+            target = landed;
+            targetStatus = lastDocument?.url && normalize(lastDocument.url) === landed ? lastDocument.status : targetStatus;
+          }
+        }
+      }
+      outcome ??= { kind: 'incomplete', reason: 'kept changing while being checked' };
+
+      if (outcome.kind === 'blocked') {
+        blocked = outcome.blocked;
+        log(`  BLOCKED by ${blocked.vendor} (HTTP ${blocked.status}${blocked.title ? ` "${blocked.title}"` : ''}): stopping the scan`);
         break;
       }
-      statusByUrl.set(url, status);
-      if (status === 404 || status === 410) {
-        // Single-page apps often serve every route with a 404 status and render it client-side.
-        // Distinguish "really missing" from "renders fine for users, wrong status for crawlers".
-        // Only 404/410: a 401/403/429/5xx page is never treated as the site's content.
-        const rendered = await page.evaluate(() => {
-          const text = (document.body?.innerText ?? '').trim();
-          const head = `${document.title} ${text.slice(0, 300)}`;
-          return text.length > 40 && !/\b(404|not found|page not found|error)\b/i.test(head);
-        });
-        if (rendered) renderedDespiteError.add(url);
-      }
-
-      // Register this page's names, and drop it if it's a duplicate discovered only now.
-      const identity = await page.evaluate(() => ({
-        canonical: (document.querySelector('link[rel="canonical"]') as HTMLLinkElement | null)?.href ?? '',
-        text: (document.body?.innerText ?? '').replace(/\s+/g, ' ').trim(),
-      })).catch(() => ({ canonical: '', text: '' }));
-      const names = [url, page.url(), identity.canonical]
-        .filter((n) => /^https?:/i.test(n) && n.startsWith(origin))
-        .map(pageKey);
-      const sameAs = names.map((k) => knownPages.get(k)).find(Boolean)
-        ?? (identity.text.length >= 200 ? contentSeen.get(createHash('sha1').update(identity.text).digest('hex')) : undefined);
-      if (sameAs) {
-        duplicates.push({ url, duplicateOf: sameAs, reason: 'loaded the same page as one already scanned' });
-        log(`  duplicate of ${sameAs}: not counted`);
-        for (const k of names) if (!knownPages.has(k)) knownPages.set(k, sameAs);
+      if (outcome.kind === 'duplicate') {
+        duplicates.push({ url, duplicateOf: outcome.sameAs, reason: 'loaded the same page as one already scanned' });
+        log(`  duplicate of ${outcome.sameAs}: not counted`);
+        for (const k of outcome.names) if (!knownPages.has(k)) knownPages.set(k, outcome.sameAs);
         continue;
       }
-      for (const k of names) knownPages.set(k, url);
-      if (identity.text.length >= 200) contentSeen.set(createHash('sha1').update(identity.text).digest('hex'), url);
+      if (outcome.kind === 'incomplete') {
+        log(`  checks incomplete: ${outcome.reason}`);
+        incomplete.push({ url, reason: outcome.reason });
+        continue;
+      }
 
-      const shot = nextShot();
-      await page.screenshot({ path: shot.absolute, fullPage: true }).catch(() => {});
+      // Commit the page.
+      const { result: pageResult, rendered, names, fingerprint, links } = outcome;
+      statusByUrl.set(pageResult.url, pageResult.status);
+      if (rendered) renderedDespiteError.add(pageResult.url);
+      for (const k of names) knownPages.set(k, pageResult.url);
+      if (fingerprint) contentSeen.set(fingerprint, pageResult.url);
+      pages.push(pageResult);
+      const from = pageResult.url;
 
-      // On an error page (a 404, a 401 sign-in wall, a failed load) the browser is showing an
-      // error screen, not the site's content, so content checks would only produce noise.
-      // The status itself is reported once the crawl finishes.
-      const errorPage = status === null || (status >= 400 && !renderedDespiteError.has(url));
-      const findings: Finding[] = errorPage ? [] : [
-        ...checkJavaScript(events, url, origin),
-        ...checkNetwork(events, url, origin),
-        ...await checkImages(page, url),
-        ...await checkAccessibility(page, url, origin).catch((e) => { log(`  axe failed: ${(e as Error).message}`); return []; }),
-        ...await checkMobile(page, url, nextShot),
-        ...checkPerformance(loadMs, url),
-      ];
-      pages.push({ url, status, loadMs, title: await page.title(), screenshot: shot.relative, findings });
-
-      const links = await page.$$eval('a[href]', (as) => as.map((a) => ({
-        href: (a as HTMLAnchorElement).href,
-        inNav: !!a.closest('nav, header, [role="navigation"]'),
-      })));
       for (const { href: raw, inNav } of links) {
         if (!/^https?:/i.test(raw)) continue;
         const link = normalize(raw);
         // PDFs are collected separately (and may live on a subdomain, e.g. a docs CDN).
         if (looksLikePdfLink(link) && isFirstParty(link, origin) && !exclude.some((re) => re.test(link))) {
           if (!pdfLinks.has(link)) pdfLinks.set(link, new Set());
-          pdfLinks.get(link)!.add(url);
+          pdfLinks.get(link)!.add(from);
           continue;
         }
         if (!link.startsWith(origin)) continue;
         if (!referrers.has(link)) referrers.set(link, new Set());
-        referrers.get(link)!.add(url);
+        referrers.get(link)!.add(from);
         if (!visited.has(link) && allowed(link)) (inNav ? navQueue : queue).push(link);
       }
     }
@@ -490,6 +621,8 @@ export async function runScout(options: ScoutOptions, existingBrowser?: Browser)
       });
     }
 
+    siteFindings.push(...incompleteFindings(incomplete));
+
     return {
       target: profile.startUrl,
       profile: profile.name,
@@ -504,6 +637,26 @@ export async function runScout(options: ScoutOptions, existingBrowser?: Browser)
       duplicates,
       blocked,
     };
+    } catch (e) {
+      // Something unexpected after crawling began: keep what was completed rather than
+      // losing every finding. The caller reports the scan as aborted (CLI exit 2).
+      const message = (e as Error).message.split('\n')[0];
+      log(`  scan aborted: ${message}`);
+      return {
+        target: profile.startUrl,
+        profile: profile.name,
+        startedAt: startedAt.toISOString(),
+        durationMs: Date.now() - startedAt.getTime(),
+        loginMs,
+        pages,
+        findings: dedupe([...incompleteFindings(incomplete), ...pages.flatMap((p) => p.findings)]),
+        mode,
+        pdfs: [],
+        duplicates,
+        blocked,
+        aborted: message,
+      };
+    }
   } finally {
     await context.close();
     if (!existingBrowser) await browser.close();

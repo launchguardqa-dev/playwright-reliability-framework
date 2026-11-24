@@ -153,4 +153,6 @@ export interface ScoutResult {
    * Scout stops at that point. atStart: nothing at all was scanned.
    */
   blocked?: { url: string; status: number | null; title: string; vendor: string; atStart: boolean; screenshot?: string };
+  /** Set when an unexpected error ended the scan early: results cover what completed before it. */
+  aborted?: string;
 }
