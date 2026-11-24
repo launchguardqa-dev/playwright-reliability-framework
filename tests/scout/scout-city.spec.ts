@@ -170,3 +170,71 @@ test.describe('Scout on a city site: identification headers', () => {
     expect(corsNoise, 'no findings caused by Scout itself').toEqual([]);
   });
 });
+
+test.describe('Scout on a city site: documents on an agenda platform', () => {
+  const AGENDA = '/View.ashx?M=A&ID=101';
+  const DETAILS = '/View.ashx?M=F&ID=102';
+  const PACKET = '/meeting/packet.pdf';
+
+  test('authorized: documents on the platform are found, confirmed as PDFs and analyzed', async ({ browser }, testInfo) => {
+    const site = await startCitySite();
+    try {
+      const host = new URL(site.embedOrigin).hostname;
+      const result = await runScout({
+        profile: { name: 'city', startUrl: `${site.origin}/` }, maxPages: 1, delayMs: 0,
+        outDir: testInfo.outputPath('docs'), contact: CONTACT, documentHosts: [host],
+      }, browser);
+      const byPath = Object.fromEntries(result.pdfs.map((p) => [new URL(p.url).pathname + new URL(p.url).search, p]));
+
+      expect(byPath[AGENDA]).toMatchObject({ analyzed: true, host, pages: 4, tagged: false });
+      expect(byPath[PACKET]).toMatchObject({ analyzed: true, host, pages: 2, tagged: true });
+      expect(byPath[DETAILS], 'a platform link that turns out to be a web page is dropped, not reported').toBeUndefined();
+      expect(result.findings.some((f) => f.rule === 'pdf-unreadable')).toBe(false);
+      expect(result.findings.find((f) => f.rule === 'pdf-untagged')?.samples?.join(' ')).toContain('View.ashx?M=A&ID=101');
+
+      // The platform is a third party: it never gets the contact email.
+      const docRequests = site.thirdPartyRequests.filter((r) => r.path === '/View.ashx' || r.path === '/meeting/packet.pdf');
+      expect(docRequests.length).toBeGreaterThan(0);
+      for (const r of docRequests) {
+        expect(r.from, `${r.method} ${r.path}`).toBeUndefined();
+        expect(r.userAgent).not.toContain(CONTACT);
+      }
+
+      const html = renderGovHtml(result);
+      expect(html).toContain(`(on ${host})`);
+      expect(html).toContain('a meeting or document platform the agency uses');
+    } finally {
+      await site.close();
+    }
+  });
+
+  test('without the platform listed, third-party documents are not collected', async ({ browser }, testInfo) => {
+    const site = await startCitySite();
+    try {
+      const result = await runScout({
+        profile: { name: 'city', startUrl: `${site.origin}/` }, maxPages: 1, delayMs: 0, outDir: testInfo.outputPath('nodocs'),
+      }, browser);
+      expect(result.pdfs.filter((p) => p.host)).toEqual([]);
+    } finally {
+      await site.close();
+    }
+  });
+
+  test('public scan: platform documents are counted but never requested', async ({ browser }, testInfo) => {
+    testInfo.setTimeout(60_000);
+    const site = await startCitySite();
+    try {
+      const host = new URL(site.embedOrigin).hostname;
+      const result = await runScout({
+        profile: { name: 'city', startUrl: `${site.origin}/` }, maxPages: 1, delayMs: 0,
+        outDir: testInfo.outputPath('public-docs'), mode: 'public', contact: CONTACT, documentHosts: [host],
+      }, browser);
+      const hosted = result.pdfs.filter((p) => p.host === host);
+      expect(hosted.length).toBeGreaterThan(0);
+      expect(hosted.every((p) => !p.analyzed && /hosted on .*not requested/.test(p.skippedReason ?? ''))).toBe(true);
+      expect(site.thirdPartyRequests.filter((r) => r.path === '/View.ashx' || r.path === '/meeting/packet.pdf')).toEqual([]);
+    } finally {
+      await site.close();
+    }
+  });
+});

@@ -1,6 +1,6 @@
 # playwright-reliability-framework
 
-> A Playwright + TypeScript automation framework built for reliability, maintainability, and CI stability. 182 tests across auth, cart, checkout, product, sorting, and navigation flows, a bug-detection matrix that proves the checks catch real defects, and LaunchGuard Scout, an automated QA scanner for any site. Gated by lint and typecheck in CI.
+> A Playwright + TypeScript automation framework built for reliability, maintainability, and CI stability. 189 tests across auth, cart, checkout, product, sorting, and navigation flows, a bug-detection matrix that proves the checks catch real defects, and LaunchGuard Scout, an automated QA scanner for any site. Gated by lint and typecheck in CI.
 
 [![Playwright Tests](https://github.com/launchguardqa-dev/playwright-reliability-framework/actions/workflows/playwright.yml/badge.svg)](https://github.com/launchguardqa-dev/playwright-reliability-framework/actions/workflows/playwright.yml)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue)
@@ -168,6 +168,7 @@ npm run scout -- https://agency.example.gov --public-scan --contact you@example.
 - **A plain-English summary** of what was checked and the most important problems.
 - **What the DOJ Title II rule requires**, with compliance dates and sources. The dates are in one config value (`TITLE_II` in `scout/report-gov.ts`), verified against ada.gov because they've already been extended once.
 - **A PDF remediation estimate:** documents analyzed, total pages, untagged, scanned, missing title or language, plus a per-document table.
+- **Documents on agenda platforms are included.** Many agencies publish agendas, minutes and packets on a meeting-management vendor rather than their own site: Granicus, Legistar, eScribe, IQM2, NovusAgenda, PrimeGov, BoardDocs, Municode Meetings, CivicWeb. Scout follows links to those platforms (add others with `--document-hosts`). Their links often don't end in `.pdf` (Legistar's `View.ashx?M=A&ID=…`), so each one must be confirmed as a PDF by its `Content-Type` or `%PDF-` signature; links that turn out to be web pages are dropped quietly. Requests to these vendors never carry the contact email, public scans only count them, and the report notes which platform each document is on.
 - **Findings grouped by WCAG success criterion** (e.g. *1.1.1 Non-text Content*), mapped from axe's own rule tags.
 - **A manual testing checklist** for what automation can't verify: keyboard use, focus order and visibility, skip links, NVDA screen reader checks, forms and errors, zoom and reflow, captions, motion, color, and PDF reading order. A tester marks each item pass, fail, or not applicable, adds notes, and downloads the results as CSV.
 
@@ -313,7 +314,7 @@ playwright-reliability-framework/
 │   ├── product/product.spec.ts   # Product detail page (6)
 │   ├── sorting/sorting.spec.ts   # Sort order data integrity (6)
 │   ├── users/user-variants.spec.ts # 8 checks × 5 users: proves checks catch bugs (40)
-│   ├── scout/                    # Scout's own tests against a planted-bug fixture site, a city site, blocked sites, self-navigating pages, public-scan limits, unit tests (100)
+│   ├── scout/                    # Scout's own tests against a planted-bug fixture site, a city site, blocked sites, self-navigating pages, public-scan limits, unit tests (107)
 │   └── smoke/                    # @smoke tag docs
 ├── scout/                        # LaunchGuard Scout scanner (crawl, checks, report, CLI, profiles)
 ├── .claude/skills/qa-run/        # /qa-run Claude Code skill: AI triage on top of Scout

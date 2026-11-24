@@ -151,6 +151,14 @@ function titleIINote(): string {
   </section>`;
 }
 
+/** Documents on an agenda platform are still the agency's content, but fixed through the vendor. */
+function hostedNote(result: ScoutResult): string {
+  const hosts = [...new Set(result.pdfs.map((p) => p.host).filter(Boolean))] as string[];
+  if (!hosts.length) return '';
+  const count = result.pdfs.filter((p) => p.host).length;
+  return `<p>${count} of these document(s) are published on ${hosts.map(esc).join(', ')}, a meeting or document platform the agency uses. They are still the agency’s content, so they count toward compliance. They are usually fixed by tagging the source files before upload or through the vendor’s accessibility settings.</p>`;
+}
+
 function pdfSection(result: ScoutResult): string {
   if (!result.pdfs.length) return '';
   const s = pdfSummary(result.pdfs);
@@ -177,7 +185,7 @@ function pdfSection(result: ScoutResult): string {
     const file = decodeURIComponent(new URL(p.url).pathname.split('/').pop() || p.url);
     const status = p.analyzed ? '' : `<br><span class="meta">${esc(p.skippedReason ?? p.error ?? 'not analyzed')}</span>`;
     return `<tr>
-      <td><a href="${esc(p.url)}">${esc(file)}</a>${status}</td>
+      <td><a href="${esc(p.url)}">${esc(file)}</a>${p.host ? ` <span class="meta">(on ${esc(p.host)})</span>` : ''}${status}</td>
       <td>${p.pages ?? '–'}</td>
       <td>${p.analyzed ? yes(p.tagged) : '–'}</td>
       <td>${p.analyzed ? (p.title ? 'Yes' : '<strong>No</strong>') : '–'}</td>
@@ -190,6 +198,7 @@ function pdfSection(result: ScoutResult): string {
   <section>
     <h2>PDF documents</h2>
     <p>Agendas, minutes, budgets and forms published as PDFs must meet the same standard as web pages. These numbers support a remediation estimate: untagged PDFs need tagging, and scanned pages also need text recognition (OCR) before they can be tagged.</p>
+    ${hostedNote(result)}
     ${stats}
     <details><summary>All ${result.pdfs.length} PDF(s)</summary>
       <div class="table-wrap"><table>

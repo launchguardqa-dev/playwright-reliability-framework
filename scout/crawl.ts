@@ -8,6 +8,7 @@ import {
 } from './checks';
 import { analyzePdf, looksLikePdfLink, pdfFindings } from './pdf';
 import { detectBlock } from './blocked';
+import { hasPdfSignature, isHostedDocumentLink } from './document-hosts';
 import { fetchRobots, Robots, SCOUT_TOKEN } from './robots';
 import { Finding, PageResult, PdfResult, ScoutOptions, ScoutResult, Severity, Confidence } from './types';
 
@@ -480,7 +481,10 @@ export async function runScout(options: ScoutOptions, existingBrowser?: Browser)
         if (!/^https?:/i.test(raw)) continue;
         const link = normalize(raw);
         // PDFs are collected separately (and may live on a subdomain, e.g. a docs CDN).
-        if (looksLikePdfLink(link) && isFirstParty(link, origin) && !exclude.some((re) => re.test(link))) {
+        // Also documents on agenda platforms (Legistar, Granicus, ...) the site links to.
+        const isDocument = (looksLikePdfLink(link) && isFirstParty(link, origin))
+          || isHostedDocumentLink(link, options.documentHosts);
+        if (isDocument && !exclude.some((re) => re.test(link))) {
           if (!pdfLinks.has(link)) pdfLinks.set(link, new Set());
           pdfLinks.get(link)!.add(from);
           continue;
@@ -555,15 +559,25 @@ export async function runScout(options: ScoutOptions, existingBrowser?: Browser)
     const pdfs: PdfResult[] = [];
     const pdfCap = isPublic ? PUBLIC_MAX_PDF_HEADS : (options.maxPdfs ?? DEFAULT_MAX_PDFS);
     let fetched = 0;
+    const dropNonPdf = (result: PdfResult) => pdfs.splice(pdfs.indexOf(result), 1);
     for (const [url, from] of pdfLinks) {
-      const result: PdfResult = { url, linkedFrom: [...from], analyzed: false };
+      // Documents on an agenda platform (Legistar, Granicus...) are the agency's content
+      // but a third party's server: no contact email to them, and public scans don't
+      // request them at all.
+      const thirdParty = !isFirstParty(url, origin);
+      const result: PdfResult = { url, linkedFrom: [...from], analyzed: false, host: thirdParty ? new URL(url).hostname : undefined };
+      const requestHeaders = thirdParty ? {} : directHeaders;
       pdfs.push(result);
       if (blocked) {
         result.skippedReason = 'not requested: the site blocked automated access';
         continue;
       }
-      if (!robotsAllow(url)) {
+      if (!thirdParty && !robotsAllow(url)) {
         result.skippedReason = 'disallowed by robots.txt';
+        continue;
+      }
+      if (isPublic && thirdParty) {
+        result.skippedReason = `public scan: hosted on ${result.host}, not requested`;
         continue;
       }
       if (fetched >= pdfCap) {
@@ -572,13 +586,13 @@ export async function runScout(options: ScoutOptions, existingBrowser?: Browser)
       }
       fetched++;
       await sleep(delayMs);
-      const head = await context.request.head(url, { timeout: 30_000, maxRedirects: 5, ...directHeaders }).catch(() => null);
+      const head = await context.request.head(url, { timeout: 30_000, maxRedirects: 5, ...requestHeaders }).catch(() => null);
       const type = head?.headers()['content-type'] ?? '';
       const length = Number(head?.headers()['content-length']);
       if (Number.isFinite(length) && length > 0) result.bytes = length;
-      // Links like /DocumentCenter/View/123 are only PDFs if the server says so.
+      // Links like /DocumentCenter/View/123 or View.ashx?ID=5 are only PDFs if the server says so.
       if (head?.ok() && type && !/pdf/i.test(type) && !/\.pdf$/i.test(new URL(url).pathname)) {
-        pdfs.pop();
+        dropNonPdf(result);
         continue;
       }
       if (isPublic) {
@@ -590,13 +604,20 @@ export async function runScout(options: ScoutOptions, existingBrowser?: Browser)
         continue;
       }
       log(`  PDF ${fetched}/${Math.min(pdfCap, pdfLinks.size)}: ${url}`);
-      const res = await context.request.get(url, { timeout: 60_000, maxRedirects: 5, ...directHeaders }).catch((e: Error) => e);
+      const res = await context.request.get(url, { timeout: 60_000, maxRedirects: 5, ...requestHeaders }).catch((e: Error) => e);
       if (res instanceof Error || !res.ok()) {
         result.error = res instanceof Error ? res.message.split('\n')[0] : `HTTP ${res.status()}`;
         continue;
       }
-      const analysis = await analyzePdf(url, await res.body());
-      Object.assign(result, analysis, { url, linkedFrom: [...from] });
+      const body = await res.body();
+      // A link that only LOOKED like a document (no .pdf in its path) and turns out not to
+      // be a PDF is just a web page: drop it quietly rather than report "unreadable PDF".
+      if (!hasPdfSignature(body) && !/pdf/i.test(res.headers()['content-type'] ?? '') && !/\.pdf$/i.test(new URL(url).pathname)) {
+        dropNonPdf(result);
+        continue;
+      }
+      const analysis = await analyzePdf(url, body);
+      Object.assign(result, analysis, { url, linkedFrom: [...from], host: result.host });
     }
     siteFindings.push(...pdfFindings(pdfs));
 

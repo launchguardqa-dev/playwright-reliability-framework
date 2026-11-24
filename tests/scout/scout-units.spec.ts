@@ -3,6 +3,7 @@ import { isFirstParty, wcagFromTags, resourceUrlInMessage, checkJavaScript } fro
 import { dedupe } from '../../scout/crawl';
 import { analyzePdf, looksLikePdfLink, pdfFindings, pdfSummary } from '../../scout/pdf';
 import { parseRobots, fetchRobots } from '../../scout/robots';
+import { isHostedDocumentLink, hasPdfSignature } from '../../scout/document-hosts';
 import { Finding } from '../../scout/types';
 import { makePdf } from './pdf-fixtures';
 
@@ -187,5 +188,32 @@ test.describe('Scout: console errors about third-party resources', () => {
     const [f] = checkJavaScript(events, site, site);
     expect(f).toMatchObject({ rule: 'console-error', severity: 'medium' });
     expect(f.thirdParty).toBeUndefined();
+  });
+});
+
+test.describe('Scout: documents on agenda platforms', () => {
+  test('recognizes document links on known platforms, including ones without .pdf', () => {
+    expect(isHostedDocumentLink('https://lamesa.legistar.com/View.ashx?M=A&ID=1234567&GUID=ABC')).toBe(true);
+    expect(isHostedDocumentLink('https://lamesa.granicus.com/MetaViewer.php?view_id=2&clip_id=99&meta_id=5')).toBe(true);
+    expect(isHostedDocumentLink('https://pub-elcajon.escribemeetings.com/filestream.ashx?DocumentId=4321')).toBe(true);
+    expect(isHostedDocumentLink('https://santee.iqm2.com/Citizens/FileOpen.aspx?Type=1&ID=2001')).toBe(true);
+    expect(isHostedDocumentLink('https://go.boarddocs.com/ca/district/Board.nsf/files/X/$file/packet.pdf')).toBe(true);
+  });
+
+  test('ignores non-document pages on those platforms, and look-alike hosts', () => {
+    expect(isHostedDocumentLink('https://lamesa.legistar.com/Calendar.aspx')).toBe(false);
+    expect(isHostedDocumentLink('https://legistar.com.evil.net/View.ashx?ID=1')).toBe(false);
+    expect(isHostedDocumentLink('https://notgranicus.com/agenda.pdf')).toBe(false);
+    expect(isHostedDocumentLink('https://example.com/agenda.pdf')).toBe(false);
+  });
+
+  test('extra hosts can be added', () => {
+    expect(isHostedDocumentLink('https://docs.city-vendor.com/files/budget.pdf')).toBe(false);
+    expect(isHostedDocumentLink('https://docs.city-vendor.com/files/budget.pdf', ['city-vendor.com'])).toBe(true);
+  });
+
+  test('recognizes the PDF file signature', () => {
+    expect(hasPdfSignature(new Uint8Array(Buffer.from('%PDF-1.7\n...')))).toBe(true);
+    expect(hasPdfSignature(new Uint8Array(Buffer.from('<!doctype html>')))).toBe(false);
   });
 });

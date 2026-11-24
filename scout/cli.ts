@@ -23,6 +23,9 @@ import { Profile, Severity } from './types';
  *   --contact <email>    Sent in the User-Agent and From header so site owners can reach you.
  *   --report gov         Government accessibility report (ADA Title II, WCAG 2.1 AA) instead of the standard one.
  *   --max-pdfs <n>       PDFs to download and analyze in an authorized scan (default 20).
+ *   --document-hosts <a,b>  Extra hosts where the agency publishes documents, beyond the built-in
+ *                        agenda platforms (Granicus, Legistar, eScribe, IQM2, NovusAgenda, PrimeGov,
+ *                        BoardDocs, Municode, CivicWeb). Comma-separated; subdomains included.
  *   --profile <file>     JSON profile (start URL, extra paths, excludes, optional login steps).
  *   --max-pages <n>      Page limit (default 15).
  *   --delay <ms>         Politeness delay between page loads (default 750).
@@ -120,6 +123,9 @@ async function main() {
     mode,
     contact,
     maxPdfs: args['max-pdfs'] !== undefined ? Number(args['max-pdfs']) : undefined,
+    documentHosts: typeof args['document-hosts'] === 'string'
+      ? args['document-hosts'].split(',').map((h) => h.trim()).filter(Boolean)
+      : undefined,
     log: (m) => console.log(`  ${m}`),
   });
 
