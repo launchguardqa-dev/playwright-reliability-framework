@@ -200,15 +200,33 @@ export function checkNetwork(events: PageEvents, url: string, origin: string): F
 }
 
 export async function checkImages(page: Page, url: string): Promise<Finding[]> {
-  const images = await page.$$eval('img', (els) => els.map((img) => ({
-    src: img.currentSrc || img.getAttribute('src') || '',
-    alt: img.getAttribute('alt') ?? '',
-    broken: img.complete && img.naturalWidth === 0,
-    visible: img.getBoundingClientRect().width > 0,
-  })));
+  const raw = await page.$$eval('img', (els) => els.map((img) => {
+    // Lazy-loading libraries (slick, lazysizes, CMS themes) start every image on one tiny
+    // placeholder and keep the real address in a data attribute until it scrolls into view.
+    const lazy = img.getAttribute('data-src') || img.getAttribute('data-lazy') || img.getAttribute('data-lazy-src')
+      || img.getAttribute('data-original') || (img.getAttribute('data-srcset') || '').trim().split(/[\s,]+/)[0] || '';
+    let real = '';
+    try {
+      real = lazy ? new URL(lazy, document.baseURI).href : '';
+    } catch {
+      real = '';
+    }
+    return {
+      src: img.currentSrc || img.getAttribute('src') || '',
+      real,
+      alt: img.getAttribute('alt') ?? '',
+      broken: img.complete && img.naturalWidth === 0,
+      visible: img.getBoundingClientRect().width > 0,
+    };
+  }));
+  // Judge each image by the image it will actually show: its lazy-load address when it has
+  // one. Inline data: URIs are placeholders (often a 1x1 GIF), never the real content.
+  const images = raw.map((i) => ({ ...i, src: i.real || i.src }))
+    .filter((i) => !i.src.startsWith('data:'));
   const out: Finding[] = [];
 
-  const broken = images.filter((i) => i.broken && i.src);
+  // "Broken" means the browser failed to load what it was given, so use the original list.
+  const broken = raw.filter((i) => i.broken && i.src && !i.src.startsWith('data:'));
   if (broken.length) {
     out.push(finding({
       rule: 'broken-image', title: `${broken.length} image(s) failed to load`, severity: 'medium',

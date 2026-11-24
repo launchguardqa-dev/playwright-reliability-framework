@@ -31,7 +31,19 @@ export const PAGES: Record<string, string> = {
       <li><a href="/private.html">Private page</a></li>
       <li><a href="/beacons.html">Beacons</a></li>
       <li><a href="/a11y-more.html">More accessibility</a></li>
+      <li><a href="/lazy.html">Lazy-loaded images</a></li>
     </ul>`),
+
+  // Lazy loading, as seen live: every image starts on one placeholder (an inline 1x1 GIF, or
+  // a shared blank.png) with its real, distinct address in a data attribute. Not a bug.
+  '/lazy.html': page('Lazy-loaded images', `
+    <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-src="/img/council.png" alt="Council meeting" width="40" height="40">
+    <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-src="/img/park.png" alt="New park opening" width="40" height="40">
+    <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-src="/img/roads.png" alt="Road work update" width="40" height="40">
+    <img src="/img/blank.png" data-lazy="/img/slide1.png" alt="Farmers market" width="40" height="40">
+    <img src="/img/blank.png" data-lazy="/img/slide2.png" alt="Library hours" width="40" height="40">
+    <img src="/img/blank.png" data-lazy="/img/slide3.png" alt="Summer camps" width="40" height="40">
+    <img src="/img/placeholder.gif" data-original="/img/staff.png" alt="Staff photo" width="40" height="40">`),
 
   // robots.txt disallows /blocked/. Clean, so it adds no findings when an authorized scan visits it.
   '/blocked/page.html': page('Blocked page', '<p>robots.txt asks crawlers not to visit this page.</p>'),
