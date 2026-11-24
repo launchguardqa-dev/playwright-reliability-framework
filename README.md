@@ -1,6 +1,6 @@
 # playwright-reliability-framework
 
-> A Playwright + TypeScript automation framework built for reliability, maintainability, and CI stability. 154 tests across auth, cart, checkout, product, sorting, and navigation flows, a bug-detection matrix that proves the checks catch real defects, and LaunchGuard Scout, an automated QA scanner for any site. Gated by lint and typecheck in CI.
+> A Playwright + TypeScript automation framework built for reliability, maintainability, and CI stability. 177 tests across auth, cart, checkout, product, sorting, and navigation flows, a bug-detection matrix that proves the checks catch real defects, and LaunchGuard Scout, an automated QA scanner for any site. Gated by lint and typecheck in CI.
 
 [![Playwright Tests](https://github.com/launchguardqa-dev/playwright-reliability-framework/actions/workflows/playwright.yml/badge.svg)](https://github.com/launchguardqa-dev/playwright-reliability-framework/actions/workflows/playwright.yml)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue)
@@ -207,6 +207,14 @@ Both fixes are covered by a fixture "city site" (`tests/scout/city-site.ts`) mod
 
 **Re-validating those fixes live surfaced a third, caused by Scout itself.** Both fixes worked on the real site, but the scan showed Google Fonts and Google Maps requests "blocked by CORS policy". Scout was adding its `From` header to *every* request. `From` isn't a CORS-safelisted header, so each cross-origin font or API request triggered a preflight that the third party rejected: failures a real visitor would never see. It also sent the contact email to Google, YouTube and Akamai. Now the full identification (contact in the User-Agent, plus `From`) goes only to the scanned site's own origin. Third parties see a User-Agent with the tool name and no email, and Scout's direct requests (robots.txt, PDFs) carry the identification explicitly. Console errors that the page logs about someone else's resource ("Access to font at 'https://fonts.gstatic.com/…' … blocked by CORS policy") are attributed to that host. The fixture's third-party server rejects preflights the way real CDNs do and logs every header it receives. 4 of the 6 new tests fail on the code before this fix; the other 2 confirm the site still gets the identification and its own errors stay its own.
 
+**A WAF-protected city site produced false WCAG findings against its block page.** El Cajon's bot protection answered a public scan with HTTP 403 "Access Denied", and Scout reported a missing `lang` attribute and mobile overflow, all on the block page. That's the worst kind of error: a false accessibility finding against an agency. The old "renders despite an error status" rule counted any 4xx page with some text and no "404/not found/error" wording as real content. Now:
+- **Block pages are detected by positive signals:** known signatures (Cloudflare challenge and "Attention Required!", Akamai's "Reference #…", Imperva/Incapsula, Sucuri, F5, generic "Access Denied"/"Forbidden" titles) together with an error status; any 429; and a 401/403 on the start page. A 2xx page is never a block, even one titled "Access Denied: …".
+- **"Renders despite an error" is limited to 404/410,** the single-page-app case, which still works. A 401/403/429/5xx page is never treated as the site's content.
+- **On a block, Scout stops:** no further pages, no PDFs, no link checks, no retries. It reports one *info* finding, "Site blocks automated access (HTTP 403 "Access Denied")", saying no checks were run and what to do (request permission in a public scan; allowlist Scout's User-Agent or IP in an authorized one). A block partway through keeps only the pages scanned before it.
+- **The government report says so plainly,** with no summary, findings or checklist, and the CLI exits with code 3.
+
+`tests/scout/blocked-site.ts` serves an Akamai-style 403, a Cloudflare 503 challenge, a 401, a 429, a site that blocks on its second page, and a single-page app that renders real content with a 404. Every block page has issues axe would flag, so any content finding means the block page was analyzed. 20 of the 23 new tests fail on the previous code; the other 3 are guards that make sure real pages are never called blocks.
+
 ### What it found on SauceDemo
 
 | User | Scout's findings |
@@ -295,7 +303,7 @@ playwright-reliability-framework/
 │   ├── product/product.spec.ts   # Product detail page (6)
 │   ├── sorting/sorting.spec.ts   # Sort order data integrity (6)
 │   ├── users/user-variants.spec.ts # 8 checks × 5 users: proves checks catch bugs (40)
-│   ├── scout/                    # Scout's own tests against a planted-bug fixture site, a city site, public-scan limits, unit tests (72)
+│   ├── scout/                    # Scout's own tests against a planted-bug fixture site, a city site, blocked sites, public-scan limits, unit tests (95)
 │   └── smoke/                    # @smoke tag docs
 ├── scout/                        # LaunchGuard Scout scanner (crawl, checks, report, CLI, profiles)
 ├── .claude/skills/qa-run/        # /qa-run Claude Code skill: AI triage on top of Scout

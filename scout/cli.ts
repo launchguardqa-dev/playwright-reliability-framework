@@ -136,6 +136,21 @@ async function main() {
   console.log(`\nReport:   ${path.resolve(outDir, 'report.html')}`);
   console.log(`Raw data: ${path.resolve(outDir, 'findings.json')}\n`);
 
+  if (result.blocked) {
+    const b = result.blocked;
+    const what = `HTTP ${b.status}${b.title ? ` "${b.title}"` : ''}, ${b.vendor}`;
+    if (b.atStart) {
+      console.error(`Scout: ${b.url} blocked automated access (${what}).`);
+      console.error('  No accessibility, mobile or performance checks were run; the report says so.');
+      console.error(mode === 'public'
+        ? '  Request permission before testing. The owner can allowlist the "LaunchGuardScout" User-Agent or your IP.\n'
+        : '  Ask the site owner to allowlist the "LaunchGuardScout" User-Agent or your IP in their firewall/CDN, then re-run.\n');
+      process.exit(3);
+    }
+    console.warn(`Scout: the site started blocking automated access at ${b.url} (${what}); stopped early.`);
+    console.warn(`  Findings cover only the ${result.pages.length} page(s) scanned before the block.\n`);
+  }
+
   if (failOn) {
     const threshold = SEVERITIES.indexOf(failOn);
     if (result.findings.some((f) => SEVERITIES.indexOf(f.severity) <= threshold)) process.exit(1);

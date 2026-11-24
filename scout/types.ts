@@ -148,4 +148,9 @@ export interface ScoutResult {
   robots?: { checked: boolean; skipped: string[] };
   /** URLs skipped or dropped because they are the same page as one already scanned. */
   duplicates?: { url: string; duplicateOf: string; reason: string }[];
+  /**
+   * Set when bot protection (a CDN/WAF block or challenge page) answered instead of the site.
+   * Scout stops at that point. atStart: nothing at all was scanned.
+   */
+  blocked?: { url: string; status: number | null; title: string; vendor: string; atStart: boolean; screenshot?: string };
 }
